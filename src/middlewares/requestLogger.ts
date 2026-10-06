@@ -4,6 +4,8 @@ import type { Logger } from '../utils/logger.js';
 
 export const requestLogger: RequestHandler = (req, res, next) => {
   const start = process.hrtime.bigint();
+  const method = req.method;
+  const path = req.originalUrl.split('?')[0] ?? req.path;
 
   res.on('finish', () => {
     const logger = res.locals.logger;
@@ -12,13 +14,12 @@ export const requestLogger: RequestHandler = (req, res, next) => {
     }
 
     const durationMs = Math.round(Number(process.hrtime.bigint() - start) / 1_000_000);
-    const fields = {
-      method: req.method,
-      path: req.path,
+    logCompleted(logger, res.statusCode, {
+      method,
+      path,
       statusCode: res.statusCode,
       durationMs,
-    };
-    logCompleted(logger, res.statusCode, fields);
+    });
   });
 
   next();
