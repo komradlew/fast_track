@@ -5,11 +5,10 @@ import { ConflictError, ExternalApiError, ValidationError } from '../src/errors/
 import { errorHandler } from '../src/middlewares/errorHandler.js';
 import { requestId } from '../src/middlewares/requestId.js';
 import { requestLogger } from '../src/middlewares/requestLogger.js';
-import { createLogger } from '../src/utils/logger.js';
+import { createLogger, type Logger } from '../src/utils/logger.js';
 import { buildTestApp } from './helpers/testApp.js';
 
-function createHandlerApp(): Express {
-  const logger = createLogger('silent');
+function createHandlerApp(logger: Logger = createLogger('silent')): Express {
   const app = express();
 
   app.use(requestId(logger));
@@ -28,7 +27,10 @@ function createHandlerApp(): Express {
     throw new ValidationError('bad symbol', ['symbol']);
   });
   app.get('/upstream', () => {
-    throw new ExternalApiError('upstream down', 503, undefined, { url: 'https://api.example' });
+    throw new ExternalApiError('upstream down', {
+      statusCode: 503,
+      context: { url: 'https://api.example' },
+    });
   });
   app.get('/sent', (_req, res, next) => {
     res.json({ ok: true });
@@ -149,6 +151,85 @@ test('handles a request that never got a request id', async () => {
   expect(JSON.stringify(thrown.body)).not.toContain('plain failure');
   expect(weird.status).toBe(500);
   expect(weird.body.error.code).toBe('INTERNAL_ERROR');
+});
+
+test('unsupported JSON charset returns 415', async () => {
+  const response = await request(createHandlerApp())
+    .post('/conflict')
+    .set('Content-Type', 'application/json; charset=koi8-r')
+    .send('{}');
+
+  expect(response.status).toBe(415);
+  expect(response.body.error).toEqual({
+    code: 'UNSUPPORTED_MEDIA_TYPE',
+    message: 'Unsupported media type',
+    requestId: expect.any(String),
+  });
+});
+
+test('unsupported content encoding returns 415', async () => {
+  const response = await request(createHandlerApp())
+    .post('/conflict')
+    .set('Content-Type', 'application/json')
+    .set('Content-Encoding', 'br2')
+    .send('{}');
+
+  expect(response.status).toBe(415);
+  expect(response.body.error.code).toBe('UNSUPPORTED_MEDIA_TYPE');
+  expect(response.body.error.message).toBe('Unsupported media type');
+});
+
+test('an exposed 4xx status uses a safe message', async () => {
+  const app = express();
+  app.get('/bad', (_req, _res, next) => {
+    next({ status: 400, expose: true, message: 'raw client text' });
+  });
+  app.use(errorHandler(createLogger('silent')));
+
+  const response = await request(app).get('/bad');
+
+  expect(response.status).toBe(400);
+  expect(response.body.error).toEqual({ code: 'BAD_REQUEST', message: 'Bad request' });
+  expect(JSON.stringify(response.body)).not.toContain('raw client text');
+});
+
+test('a hidden 4xx status stays an internal error', async () => {
+  const app = express();
+  app.get('/teapot', (_req, _res, next) => {
+    next({ status: 418, expose: false, message: 'teapot secret' });
+  });
+  app.use(errorHandler(createLogger('silent')));
+
+  const response = await request(app).get('/teapot');
+
+  expect(response.status).toBe(500);
+  expect(response.body.error.code).toBe('INTERNAL_ERROR');
+  expect(JSON.stringify(response.body)).not.toContain('teapot secret');
+});
+
+test('logs a 4xx request once, with its error code', async () => {
+  const error = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+
+  const response = await request(buildTestApp({ logger: createLogger('info') })).get('/nope');
+
+  expect(response.status).toBe(404);
+  const entries = error.mock.calls.map((call) => JSON.parse(String(call[0])) as Record<string, unknown>);
+  expect(entries.filter((entry) => entry.msg === 'Request failed')).toHaveLength(0);
+  expect(entries).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ msg: 'Request completed', statusCode: 404, errorCode: 'NOT_FOUND' }),
+    ]),
+  );
+});
+
+test('logs a 5xx request from the error handler and the request logger', async () => {
+  const error = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+
+  const response = await request(createHandlerApp(createLogger('info'))).get('/secret');
+
+  expect(response.status).toBe(500);
+  const messages = error.mock.calls.map((call) => (JSON.parse(String(call[0])) as { msg?: string }).msg);
+  expect(messages).toEqual(expect.arrayContaining(['Request failed', 'Request completed']));
 });
 
 test('request logger does nothing when the request has no logger', async () => {

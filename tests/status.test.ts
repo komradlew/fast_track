@@ -1,16 +1,29 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import request from 'supertest';
 
 import type { Logger } from '../src/utils/logger.js';
 import { buildTestApp } from './helpers/testApp.js';
+
+const packageVersion = JSON.parse(readFileSync(path.resolve(__dirname, '../package.json'), 'utf8')) as {
+  version: string;
+};
 
 test('GET /status returns ok and a valid timestamp', async () => {
   const response = await request(buildTestApp()).get('/status');
 
   expect(response.status).toBe(200);
   expect(response.body.status).toBe('ok');
-  expect(response.body.version).toBe('0.1.0');
+  expect(response.body.version).toBe(packageVersion.version);
   expect(response.body.uptimeSec).toEqual(expect.any(Number));
   expect(new Date(response.body.timestamp).toISOString()).toBe(response.body.timestamp);
+});
+
+test('GET /status returns the version injected into the app', async () => {
+  const response = await request(buildTestApp({ version: '9.9.9' })).get('/status');
+
+  expect(response.status).toBe(200);
+  expect(response.body.version).toBe('9.9.9');
 });
 
 test('GET /status returns a non-empty x-request-id', async () => {

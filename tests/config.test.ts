@@ -13,6 +13,7 @@ const defaults = {
   maxTrackedCoins: 200,
   syncIntervalMs: 300000,
   syncEnabled: true,
+  shutdownTimeoutMs: 10000,
 };
 
 test('test env without a key returns frozen defaults', () => {
@@ -55,12 +56,19 @@ test('reads valid overrides', () => {
     maxTrackedCoins: 50,
     syncIntervalMs: 60000,
     syncEnabled: false,
+    shutdownTimeoutMs: 10000,
   });
 });
 
 test.each(['abc', '0', '70000'])('rejects PORT=%s', (value) => {
   expect(() => loadConfig({ NODE_ENV: 'test', PORT: value })).toThrow(
     `Invalid env PORT: expected integer 1..65535, got "${value}"`,
+  );
+});
+
+test.each(['0x10', '1e3', ' 3000 ', '3000.0', '-1'])('rejects a non-decimal PORT=%s', (value) => {
+  expect(() => loadConfig({ NODE_ENV: 'test', PORT: value })).toThrow(
+    `Invalid env PORT: expected integer 1..65535, got ${JSON.stringify(value)}`,
   );
 });
 
@@ -76,25 +84,48 @@ test.each(['not a url', 'ftp://x'])('rejects CMC_BASE_URL=%s', (value) => {
   );
 });
 
-test('requires CMC_API_KEY outside test and does not echo its value', () => {
-  const secret = 'super-secret-key';
-
+test('requires CMC_API_KEY outside test and does not include a value', () => {
   expect(() => loadConfig({ NODE_ENV: 'production' })).toThrow(
     'Invalid env CMC_API_KEY: expected non-empty string',
   );
-  expect(() => loadConfig({ NODE_ENV: 'production', CMC_API_KEY: '' })).toThrow(
+  expect(() => loadConfig({ NODE_ENV: 'production', CMC_API_KEY: '   ' })).toThrow(
     'Invalid env CMC_API_KEY: expected non-empty string',
   );
-  expect(() => loadConfig({ NODE_ENV: 'production', CMC_API_KEY: ` ${secret} ` })).not.toThrow();
+});
+
+test('trims CMC_API_KEY', () => {
+  const config = loadConfig({ NODE_ENV: 'production', CMC_API_KEY: '  secret  ' });
+
+  expect(config.cmcApiKey).toBe('secret');
+});
+
+test('does not echo CMC_API_KEY when another field is invalid', () => {
+  const secret = 'super-secret-key';
 
   let message = '';
   try {
-    loadConfig({ NODE_ENV: 'production', CMC_API_KEY: '' });
+    loadConfig({ NODE_ENV: 'production', CMC_API_KEY: secret, PORT: 'abc' });
   } catch (error) {
     message = error instanceof Error ? error.message : String(error);
   }
+
+  expect(message).toBe('Invalid env PORT: expected integer 1..65535, got "abc"');
   expect(message).not.toContain(secret);
-  expect(message).not.toContain('got');
+});
+
+test.each([
+  ['999', '999'],
+  ['60001', '60001'],
+  ['1000.0', '1000.0'],
+])('rejects SHUTDOWN_TIMEOUT_MS=%s', (_label, value) => {
+  expect(() => loadConfig({ NODE_ENV: 'test', SHUTDOWN_TIMEOUT_MS: value })).toThrow(
+    `Invalid env SHUTDOWN_TIMEOUT_MS: expected integer 1000..60000, got ${JSON.stringify(value)}`,
+  );
+});
+
+test('accepts shutdown timeout bounds', () => {
+  expect(loadConfig({ NODE_ENV: 'test', SHUTDOWN_TIMEOUT_MS: '1000' }).shutdownTimeoutMs).toBe(1000);
+  expect(loadConfig({ NODE_ENV: 'test', SHUTDOWN_TIMEOUT_MS: '60000' }).shutdownTimeoutMs).toBe(60000);
 });
 
 test('rejects a sync interval below 60000ms', () => {

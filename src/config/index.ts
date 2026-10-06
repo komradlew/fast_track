@@ -1,9 +1,10 @@
+import { LOG_LEVELS, type LogLevel } from '../utils/logger.js';
+
 const NODE_ENVS = ['development', 'production', 'test'] as const;
-const LOG_LEVELS = ['error', 'warn', 'info', 'debug', 'silent'] as const;
 const QUOTE_CURRENCY_PATTERN = /^[A-Z]{3,5}$/;
 
 export type NodeEnv = (typeof NODE_ENVS)[number];
-export type LogLevel = (typeof LOG_LEVELS)[number];
+export type { LogLevel };
 
 export interface AppConfig {
   readonly nodeEnv: NodeEnv;
@@ -18,6 +19,7 @@ export interface AppConfig {
   readonly maxTrackedCoins: number;
   readonly syncIntervalMs: number;
   readonly syncEnabled: boolean;
+  readonly shutdownTimeoutMs: number;
 }
 
 function invalidEnv(name: string, expected: string, raw: string): never {
@@ -37,9 +39,11 @@ function readInt(
   }
 
   const expected = max === undefined ? `integer >= ${min}` : `integer ${min}..${max}`;
+  if (!/^\d+$/.test(raw)) {
+    invalidEnv(name, expected, raw);
+  }
   const value = Number(raw);
-  const inRange = value >= min && (max === undefined || value <= max);
-  if (raw.trim() === '' || !Number.isInteger(value) || !inRange) {
+  if (value < min || (max !== undefined && value > max)) {
     invalidEnv(name, expected, raw);
   }
   return value;
@@ -126,9 +130,9 @@ function readPattern(
 }
 
 function readCmcApiKey(env: NodeJS.ProcessEnv, nodeEnv: NodeEnv): string {
-  const raw = env.CMC_API_KEY;
-  if (raw !== undefined && raw.trim() !== '') {
-    return raw;
+  const trimmed = env.CMC_API_KEY?.trim() ?? '';
+  if (trimmed !== '') {
+    return trimmed;
   }
   if (nodeEnv === 'test') {
     return '';
@@ -152,5 +156,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     maxTrackedCoins: readInt(env, 'MAX_TRACKED_COINS', 200, 1, 200),
     syncIntervalMs: readInt(env, 'SYNC_INTERVAL_MS', 300_000, 60_000),
     syncEnabled: readBool(env, 'SYNC_ENABLED', true),
+    shutdownTimeoutMs: readInt(env, 'SHUTDOWN_TIMEOUT_MS', 10_000, 1000, 60_000),
   });
 }

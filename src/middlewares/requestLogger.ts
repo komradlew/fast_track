@@ -14,11 +14,13 @@ export const requestLogger: RequestHandler = (req, res, next) => {
     }
 
     const durationMs = Math.round(Number(process.hrtime.bigint() - start) / 1_000_000);
+    const errorCode = res.locals.errorCode;
     logCompleted(logger, res.statusCode, {
       method,
       path,
       statusCode: res.statusCode,
       durationMs,
+      ...(typeof errorCode === 'string' ? { errorCode } : {}),
     });
   });
 

@@ -30,13 +30,24 @@ export class ConflictError extends AppError {
   }
 }
 
+export type ExternalApiCode = 'EXTERNAL_API_ERROR' | 'EXTERNAL_API_TIMEOUT' | 'EXTERNAL_API_UNAVAILABLE';
+
 export class ExternalApiError extends AppError {
   constructor(
     message: string,
-    statusCode: 502 | 503 | 504 = 502,
-    details?: unknown,
-    context?: Record<string, unknown>,
+    options: {
+      statusCode?: 502 | 503 | 504;
+      code?: ExternalApiCode;
+      details?: unknown;
+      context?: Record<string, unknown>;
+    } = {},
   ) {
-    super(message, statusCode, 'EXTERNAL_API_ERROR', details, context);
+    super(
+      message,
+      options.statusCode ?? 502,
+      options.code ?? 'EXTERNAL_API_ERROR',
+      options.details,
+      options.context,
+    );
   }
 }
