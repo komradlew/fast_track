@@ -1,7 +1,9 @@
 import { Router } from 'express';
 
-import { getStatus } from './status.controller.js';
+import { createGetStatus } from './status.controller.js';
 
-export const statusRouter = Router();
-
-statusRouter.get('/', getStatus);
+export function createStatusRouter(version: string): Router {
+  const statusRouter = Router();
+  statusRouter.get('/', createGetStatus(version));
+  return statusRouter;
+}

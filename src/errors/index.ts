@@ -6,4 +6,5 @@ export {
   NotFoundError,
   UnauthorizedError,
   ValidationError,
+  type ExternalApiCode,
 } from './httpErrors.js';

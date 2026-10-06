@@ -14,12 +14,16 @@ export function errorHandler(logger: Logger): ErrorRequestHandler {
   return (err: unknown, _req, res, next) => {
     const body = classify(err);
     const log = res.locals.logger ?? logger;
-    writeLog(log, err, body);
+    if (body.statusCode >= 500) {
+      writeLog(log, err, body);
+    }
 
     if (res.headersSent) {
       next(err);
       return;
     }
+
+    res.locals.errorCode = body.code;
 
     const error: {
       code: string;
@@ -59,25 +63,38 @@ function classify(err: unknown): ClientError {
     return { statusCode: 413, code: 'PAYLOAD_TOO_LARGE', message: 'Request body is too large' };
   }
 
+  const exposedStatus = exposedClientStatus(err);
+  if (exposedStatus !== undefined) {
+    if (exposedStatus === 415) {
+      return { statusCode: 415, code: 'UNSUPPORTED_MEDIA_TYPE', message: 'Unsupported media type' };
+    }
+    return { statusCode: exposedStatus, code: 'BAD_REQUEST', message: 'Bad request' };
+  }
+
   return { statusCode: 500, code: 'INTERNAL_ERROR', message: 'Internal server error' };
 }
 
 function writeLog(log: Logger, err: unknown, body: ClientError): void {
-  if (body.statusCode >= 500) {
-    const context = err instanceof AppError ? err.context : undefined;
-    log.error('Request failed', {
-      err: asError(err),
-      code: body.code,
-      ...(context !== undefined ? { context } : {}),
-    });
-    return;
+  const context = err instanceof AppError ? err.context : undefined;
+  log.error('Request failed', {
+    err: asError(err),
+    code: body.code,
+    ...(context !== undefined ? { context } : {}),
+  });
+}
+
+function exposedClientStatus(err: unknown): number | undefined {
+  if (typeof err !== 'object' || err === null || !('expose' in err) || err.expose !== true) {
+    return undefined;
   }
 
-  log.warn('Request failed', {
-    code: body.code,
-    statusCode: body.statusCode,
-    message: body.message,
-  });
+  const status = 'status' in err && typeof err.status === 'number' ? err.status : undefined;
+  const statusCode = 'statusCode' in err && typeof err.statusCode === 'number' ? err.statusCode : undefined;
+  const code = status ?? statusCode;
+  if (code === undefined || !Number.isInteger(code) || code < 400 || code > 499) {
+    return undefined;
+  }
+  return code;
 }
 
 function errorType(err: unknown): string | undefined {

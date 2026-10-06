@@ -48,7 +48,14 @@ test('http errors carry their status and code', () => {
     code: 'EXTERNAL_API_ERROR',
     name: 'ExternalApiError',
   });
-  expect(new ExternalApiError('timeout', 504).statusCode).toBe(504);
+  expect(new ExternalApiError('timeout', { statusCode: 504, code: 'EXTERNAL_API_TIMEOUT' })).toMatchObject({
+    statusCode: 504,
+    code: 'EXTERNAL_API_TIMEOUT',
+  });
+  expect(new ExternalApiError('unavailable', { statusCode: 503, code: 'EXTERNAL_API_UNAVAILABLE' })).toMatchObject({
+    statusCode: 503,
+    code: 'EXTERNAL_API_UNAVAILABLE',
+  });
 });
 
 test('keeps details for the client and context for logs', () => {

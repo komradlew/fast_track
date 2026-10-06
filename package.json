@@ -2,8 +2,7 @@
   "name": "fast_track",
   "version": "1.0.0",
   "private": true,
-  "description": "",
-  "main": "index.js",
+  "description": "HTTP API that tracks cryptocurrency prices via CoinMarketCap.",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "start": "node --env-file-if-exists=.env dist/server.js",
@@ -22,7 +21,7 @@
   "license": "ISC",
   "type": "commonjs",
   "engines": {
-    "node": ">=18"
+    "node": ">=22.9"
   },
   "bugs": {
     "url": "https://github.com/komradlew/fast_track/issues"
@@ -34,12 +33,11 @@
   "devDependencies": {
     "@types/express": "^5.0.6",
     "@types/jest": "^30.0.0",
-    "@types/node": "^26.6.4",
+    "@types/node": "^22",
     "@types/supertest": "^7.2.1",
-    "@typescript/native": "npm:typescript@^7.0.2",
     "jest": "^30.5.2",
     "supertest": "^7.3.1",
     "ts-jest": "^29.4.14",
-    "typescript": "npm:@typescript/typescript6@^6.0.2"
+    "typescript": "^6.0.2"
   }
 }
