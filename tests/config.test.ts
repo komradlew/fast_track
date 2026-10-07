@@ -1,4 +1,4 @@
-import { loadConfig } from '../src/config/index.js';
+import { loadConfig, loadDbConfig } from '../src/config/index.js';
 
 const defaults = {
   nodeEnv: 'development',
@@ -25,6 +25,13 @@ test('test env without a key returns frozen defaults', () => {
 
 test('development without CMC_API_KEY fails before the server starts', () => {
   expect(() => loadConfig({})).toThrow('Invalid env CMC_API_KEY: expected non-empty string');
+});
+
+test('loadDbConfig reads only the database path', () => {
+  expect(loadDbConfig({}).dbPath).toBe('./data/app.db');
+  expect(Object.isFrozen(loadDbConfig({}))).toBe(true);
+  expect(loadDbConfig({ DB_PATH: '/tmp/app.db', CMC_API_KEY: '', PORT: 'abc' }).dbPath).toBe('/tmp/app.db');
+  expect(() => loadDbConfig({ DB_PATH: '   ' })).toThrow('Invalid env DB_PATH: expected non-empty string');
 });
 
 test('reads valid overrides', () => {

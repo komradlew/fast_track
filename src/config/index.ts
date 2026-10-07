@@ -6,6 +6,10 @@ const QUOTE_CURRENCY_PATTERN = /^[A-Z]{3,5}$/;
 export type NodeEnv = (typeof NODE_ENVS)[number];
 export type { LogLevel };
 
+export interface DbConfig {
+  readonly dbPath: string;
+}
+
 export interface AppConfig {
   readonly nodeEnv: NodeEnv;
   readonly port: number;
@@ -140,6 +144,12 @@ function readCmcApiKey(env: NodeJS.ProcessEnv, nodeEnv: NodeEnv): string {
   throw new Error('Invalid env CMC_API_KEY: expected non-empty string');
 }
 
+export function loadDbConfig(env: NodeJS.ProcessEnv = process.env): DbConfig {
+  return Object.freeze({
+    dbPath: readString(env, 'DB_PATH', './data/app.db'),
+  });
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const nodeEnv = readEnum(env, 'NODE_ENV', NODE_ENVS, 'development');
 
@@ -147,7 +157,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     nodeEnv,
     port: readInt(env, 'PORT', 3000, 1, 65535),
     logLevel: readEnum(env, 'LOG_LEVEL', LOG_LEVELS, 'info'),
-    dbPath: readString(env, 'DB_PATH', './data/app.db'),
+    dbPath: loadDbConfig(env).dbPath,
     cmcBaseUrl: readUrl(env, 'CMC_BASE_URL', 'https://pro-api.coinmarketcap.com'),
     cmcApiKey: readCmcApiKey(env, nodeEnv),
     cmcTimeoutMs: readInt(env, 'CMC_TIMEOUT_MS', 5000, 100, 60_000),

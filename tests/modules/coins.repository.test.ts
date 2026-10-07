@@ -58,6 +58,10 @@ function bitcoin(): NewCoin {
   return { cmcId: 1, symbol: 'BTC', name: 'Bitcoin', slug: 'bitcoin' };
 }
 
+function createCoin(repo: CoinsRepository, input: NewCoin, at = now): Coin {
+  return repo.create(input, at, { maxCoins: 200 });
+}
+
 function expectConflict(run: () => unknown, symbol: string, constraint: string): void {
   try {
     run();
@@ -78,7 +82,7 @@ function expectConflict(run: () => unknown, symbol: string, constraint: string):
 
 test('create stores a coin that findBySymbol returns', () => {
   const { repo } = openRepo();
-  const created = repo.create(bitcoin(), now);
+  const created = createCoin(repo, bitcoin(), now);
 
   expect(created).toEqual({
     id: expect.any(Number),
@@ -97,10 +101,10 @@ test('create stores a coin that findBySymbol returns', () => {
 
 test('duplicate symbol is a conflict and keeps the original row', () => {
   const { repo } = openRepo();
-  repo.create(bitcoin(), now);
+  createCoin(repo, bitcoin(), now);
 
   expectConflict(
-    () => repo.create({ cmcId: 2, symbol: 'BTC', name: 'Other', slug: 'other' }, later),
+    () => createCoin(repo, { cmcId: 2, symbol: 'BTC', name: 'Other', slug: 'other' }, later),
     'BTC',
     'coins.symbol',
   );
@@ -108,12 +112,33 @@ test('duplicate symbol is a conflict and keeps the original row', () => {
   expect(repo.findBySymbol('BTC')).toMatchObject({ cmcId: 1, name: 'Bitcoin', updatedAt: now });
 });
 
+test('create rejects an insert once the tracked limit is reached', () => {
+  const { repo } = openRepo();
+  createCoin(repo, bitcoin(), now);
+
+  let caught: unknown;
+  try {
+    repo.create({ cmcId: 1027, symbol: 'ETH', name: 'Ethereum', slug: 'ethereum' }, later, { maxCoins: 1 });
+  } catch (err) {
+    caught = err;
+  }
+  expect(caught).toBeInstanceOf(ConflictError);
+  expect(caught).toMatchObject({
+    message: 'Tracked coin limit of 1 reached',
+    statusCode: 409,
+    code: 'CONFLICT',
+    details: undefined,
+  });
+  expect(repo.count()).toBe(1);
+  expect(repo.findBySymbol('ETH')).toBeUndefined();
+});
+
 test('duplicate cmc id is a conflict', () => {
   const { repo } = openRepo();
-  repo.create(bitcoin(), now);
+  createCoin(repo, bitcoin(), now);
 
   expectConflict(
-    () => repo.create({ cmcId: 1, symbol: 'XBT', name: 'Bitcoin', slug: 'bitcoin-2' }, later),
+    () => createCoin(repo, { cmcId: 1, symbol: 'XBT', name: 'Bitcoin', slug: 'bitcoin-2' }, later),
     'XBT',
     'coins.cmc_id',
   );
@@ -134,7 +159,7 @@ test('list filters and paginates with a total', () => {
   ];
   const stored = new Map<string, Coin>();
   for (const input of inputs) {
-    stored.set(input.symbol, repo.create(input, now));
+    stored.set(input.symbol, createCoin(repo, input, now));
   }
   repo.setActive('BTC', false, later);
 
@@ -172,7 +197,7 @@ test('setActive returns undefined when the symbol is missing', () => {
 
 test('delete removes the coin and its prices', () => {
   const { db, repo } = openRepo();
-  const coin = repo.create(bitcoin(), now);
+  const coin = createCoin(repo, bitcoin(), now);
   db.prepare(
     'INSERT INTO prices (coin_id, quote_currency, price, source_updated_at, fetched_at) VALUES (@coinId, @quote, @price, @now, @now)',
   ).run({ coinId: coin.id, quote: 'USD', price: 100, now });

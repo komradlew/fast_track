@@ -123,6 +123,20 @@ test('applies every migration on an empty database', () => {
   expect(logger.infos).toEqual([{ msg: 'Applied migration', context: { name: '001_init' } }]);
 });
 
+test('a second connection applies nothing after the first has migrated', () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'ft-'));
+  tempDirs.push(root);
+  const file = path.join(root, 'app.db');
+  const first = openDb(file);
+  const second = openDb(file);
+  databases.push(first, second);
+  const logger = createLogger();
+
+  expect(migrate(first, migrations, logger)).toEqual(['001_init']);
+  expect(migrate(second, migrations, logger)).toEqual([]);
+  expect(logger.infos).toEqual([{ msg: 'Applied migration', context: { name: '001_init' } }]);
+});
+
 test('a second run applies nothing', () => {
   const db = openTempDb();
   const logger = createLogger();
@@ -153,6 +167,19 @@ test('rolls back a migration whose SQL fails', () => {
   expect(names).toEqual(['001_init']);
   expect(tableNames(db)).not.toContain('partial_prices');
   expect(logger.infos.map((entry) => entry.context?.name)).toEqual(['001_init']);
+});
+
+test('rolls back every new migration when a later one in the same run fails', () => {
+  const db = openTempDb();
+  const logger = createLogger();
+  const list: Migration[] = [
+    { name: '001_ok', up: 'CREATE TABLE kept_marker (id INTEGER PRIMARY KEY);' },
+    { name: '002_bad', up: 'NOT VALID SQL;' },
+  ];
+
+  expect(() => migrate(db, list, logger)).toThrow(/NOT/i);
+  expect(tableNames(db)).toEqual([]);
+  expect(logger.infos).toEqual([]);
 });
 
 test('applies only a new migration on an existing database', () => {

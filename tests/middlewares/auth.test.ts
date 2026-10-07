@@ -5,7 +5,6 @@ import { errorHandler } from '../../src/middlewares/errorHandler.js';
 import { requestId } from '../../src/middlewares/requestId.js';
 import { requireRole } from '../../src/middlewares/requireRole.js';
 import { generateApiKey, hashApiKey } from '../../src/modules/auth/apiKey.js';
-import type { CoinsService } from '../../src/modules/coins/coins.service.js';
 import type { Logger } from '../../src/utils/logger.js';
 import { expectError } from '../helpers/expectError.js';
 import { buildTestApp } from '../helpers/testApp.js';
@@ -33,14 +32,11 @@ function captureLogger(): { logger: Logger; records: Array<Record<string, unknow
   return { logger: make(), records };
 }
 
-test('coin routes stay unmounted until the app receives a service', async () => {
+test('coin routes are mounted and reject a missing key', async () => {
   const response = await request(buildTestApp()).get('/api/coins');
 
-  expectError(response, 404, 'NOT_FOUND', 'Route GET /api/coins not found');
-});
-
-test('coin routes require an API key repository', () => {
-  expect(() => buildTestApp({ coins: {} as CoinsService })).toThrow('Coin routes require an API key repository');
+  expectError(response, 401, 'UNAUTHORIZED', 'Invalid or missing API key');
+  expect(response.headers['www-authenticate']).toBe('Bearer');
 });
 
 test('rejected keys are logged without the secret and a success records the key name', async () => {

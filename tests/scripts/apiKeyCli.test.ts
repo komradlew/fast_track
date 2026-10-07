@@ -83,6 +83,31 @@ test('issueApiKey stores only the hash and does not print the key', () => {
   }
 });
 
+test('issueApiKey does not require a CoinMarketCap key', () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'ft-'));
+  tempDirs.push(root);
+  const dbPath = path.join(root, 'app.db');
+  const now = new Date('2026-10-07T00:00:00.000Z');
+
+  const key = issueApiKey(
+    { DB_PATH: dbPath, NODE_ENV: 'production', PORT: 'abc' },
+    { name: 'local', role: 'read' },
+    now,
+  );
+
+  expect(key).toMatch(/^ft_[A-Za-z0-9_-]{43}$/);
+  const db = openDb(dbPath);
+  try {
+    expect(new ApiKeysRepository(db).findActiveByHash(hashApiKey(key))).toMatchObject({
+      name: 'local',
+      role: 'read',
+      createdAt: now.toISOString(),
+    });
+  } finally {
+    db.close();
+  }
+});
+
 test('readRevokeApiKeyArgs accepts a positive id', () => {
   expect(readRevokeApiKeyArgs(['--id', '3'])).toEqual({ id: 3 });
   expect(readRevokeApiKeyArgs(['--id', '0004'])).toEqual({ id: 4 });

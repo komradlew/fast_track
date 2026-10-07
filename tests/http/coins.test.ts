@@ -448,6 +448,54 @@ describe('POST /api/coins tracked-coin limit', () => {
   });
 });
 
+describe('POST /api/coins concurrent tracked-coin limit', () => {
+  const findBySymbol = jest.fn(async (symbol: string) => {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    if (symbol === 'AAA') {
+      return { cmcId: 9001, symbol: 'AAA', name: 'Aaa', slug: 'aaa' };
+    }
+    if (symbol === 'BBB') {
+      return { cmcId: 9002, symbol: 'BBB', name: 'Bbb', slug: 'bbb' };
+    }
+    return null;
+  });
+  const handle = useContext({ config: { maxTrackedCoins: 1 }, catalog: { findBySymbol } });
+
+  test('lets one of two in-flight creates win', async () => {
+    const ctx = handle.current();
+    const admin = as(ctx, ctx.adminKey);
+    const [first, second] = await Promise.all([
+      admin.post('/api/coins').send({ symbol: 'AAA' }),
+      admin.post('/api/coins').send({ symbol: 'BBB' }),
+    ]);
+
+    const statuses = [first.status, second.status].sort((left, right) => left - right);
+    expect(statuses).toEqual([201, 409]);
+    const failed = first.status === 409 ? first : second;
+    expectError(failed, 409, 'CONFLICT', 'Tracked coin limit of 1 reached');
+    expect(findBySymbol).toHaveBeenCalledTimes(2);
+    expect(count(ctx.db, 'coins')).toBe(1);
+  });
+});
+
+describe('POST /api/coins when the catalog returns another symbol', () => {
+  const handle = useContext({
+    catalog: createFakeCoinCatalog({
+      coins: { ABC: { cmcId: 99, symbol: 'OTHER', name: 'Other', slug: 'other' } },
+    }),
+  });
+
+  test('returns 502 and writes no row', async () => {
+    const ctx = handle.current();
+
+    const response = await as(ctx, ctx.adminKey).post('/api/coins').send({ symbol: 'ABC' });
+
+    expectError(response, 502, 'EXTERNAL_API_ERROR', 'Coin catalog returned a different symbol');
+    expect(response.body.error.context).toBeUndefined();
+    expect(count(ctx.db, 'coins')).toBe(0);
+  });
+});
+
 describe('POST /api/coins when the catalog fails', () => {
   const handle = useContext({ catalog: createFakeCoinCatalog({ fail: true }) });
 

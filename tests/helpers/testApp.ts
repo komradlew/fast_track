@@ -8,6 +8,10 @@ import { loadConfig } from '../../src/config/index.js';
 import { openDb, type Db } from '../../src/db/connection.js';
 import { migrate } from '../../src/db/migrate.js';
 import { migrations } from '../../src/db/migrations/index.js';
+import { ApiKeysRepository } from '../../src/modules/auth/apiKeys.repository.js';
+import { CoinsRepository } from '../../src/modules/coins/coins.repository.js';
+import { CoinsService } from '../../src/modules/coins/coins.service.js';
+import { unavailableCatalog } from '../../src/modules/coins/unavailableCatalog.js';
 import { createLogger } from '../../src/utils/logger.js';
 
 function readPackageVersion(): string {
@@ -32,12 +36,23 @@ function sharedProbeDb(): Db {
 }
 
 export function buildTestApp(overrides: Partial<AppDeps> = {}): Express {
-  const { db, ...rest } = overrides;
+  const db = overrides.db ?? sharedProbeDb();
+  const config = overrides.config ?? loadConfig({ NODE_ENV: 'test', LOG_LEVEL: 'silent' });
+  const clock = overrides.clock ?? ((): Date => new Date());
   return createApp({
-    config: loadConfig({ NODE_ENV: 'test', LOG_LEVEL: 'silent' }),
-    logger: createLogger('silent'),
-    version: readPackageVersion(),
-    db: db ?? sharedProbeDb(),
-    ...rest,
+    config,
+    logger: overrides.logger ?? createLogger('silent'),
+    version: overrides.version ?? readPackageVersion(),
+    db,
+    coins:
+      overrides.coins ??
+      new CoinsService({
+        coins: new CoinsRepository(db),
+        catalog: unavailableCatalog,
+        config,
+        clock,
+      }),
+    apiKeys: overrides.apiKeys ?? new ApiKeysRepository(db),
+    clock,
   });
 }

@@ -127,6 +127,28 @@ test('add rejects the tracked-coin limit before calling the catalog', async () =
   expect(repo.count()).toBe(1);
 });
 
+test('add rejects a catalog coin whose symbol differs and stores nothing', async () => {
+  const { repo } = openService();
+  const mismatched = createFakeCoinCatalog({
+    coins: { ABC: { cmcId: 99, symbol: 'OTHER', name: 'Other', slug: 'other' } },
+  });
+  const custom = new CoinsService({
+    coins: repo,
+    catalog: mismatched,
+    config: { maxTrackedCoins: 200 },
+    clock: () => new Date('2026-10-07T00:00:00.000Z'),
+  });
+
+  await expect(custom.add('ABC')).rejects.toMatchObject({
+    name: 'ExternalApiError',
+    statusCode: 502,
+    code: 'EXTERNAL_API_ERROR',
+    message: 'Coin catalog returned a different symbol',
+    context: { requestedSymbol: 'ABC', catalogSymbol: 'OTHER' },
+  });
+  expect(repo.count()).toBe(0);
+});
+
 test('add returns not found when the catalog has no coin', async () => {
   const { repo, service } = openService();
 

@@ -18,9 +18,9 @@ export interface AppDeps {
   logger: Logger;
   version: string;
   db: Db;
-  coins?: CoinsService;
-  apiKeys?: ApiKeysRepository;
-  clock?: () => Date;
+  coins: CoinsService;
+  apiKeys: ApiKeysRepository;
+  clock: () => Date;
 }
 
 export function createApp(deps: AppDeps): express.Express {
@@ -32,15 +32,10 @@ export function createApp(deps: AppDeps): express.Express {
   app.use(express.json({ limit: '100kb' }));
   app.use('/status', createStatusRouter(deps.version, deps.db));
 
-  if (deps.coins !== undefined) {
-    if (deps.apiKeys === undefined) {
-      throw new Error('Coin routes require an API key repository');
-    }
-    const apiRouter = Router();
-    apiRouter.use(authenticate(deps.apiKeys, deps.clock ?? (() => new Date())));
-    apiRouter.use('/coins', createCoinsRouter(deps.coins));
-    app.use('/api', apiRouter);
-  }
+  const apiRouter = Router();
+  apiRouter.use(authenticate(deps.apiKeys, deps.clock));
+  apiRouter.use('/coins', createCoinsRouter(deps.coins));
+  app.use('/api', apiRouter);
 
   app.use(notFound);
   app.use(errorHandler(deps.logger));

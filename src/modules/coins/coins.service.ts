@@ -1,5 +1,5 @@
 import type { AppConfig } from '../../config/index.js';
-import { ConflictError, NotFoundError } from '../../errors/index.js';
+import { ConflictError, ExternalApiError, NotFoundError } from '../../errors/index.js';
 import type { CoinCatalog } from './coinCatalog.js';
 import type { CoinsRepository } from './coins.repository.js';
 import type { Coin } from './coins.types.js';
@@ -52,6 +52,13 @@ export class CoinsService {
     if (found === null) {
       throw new NotFoundError('Coin ' + symbol + ' not found on CoinMarketCap');
     }
+    if (found.symbol.toUpperCase() !== symbol.toUpperCase()) {
+      throw new ExternalApiError('Coin catalog returned a different symbol', {
+        statusCode: 502,
+        code: 'EXTERNAL_API_ERROR',
+        context: { requestedSymbol: symbol, catalogSymbol: found.symbol },
+      });
+    }
 
     return this.deps.coins.create(
       {
@@ -61,6 +68,7 @@ export class CoinsService {
         slug: found.slug,
       },
       this.deps.clock().toISOString(),
+      { maxCoins: this.deps.config.maxTrackedCoins },
     );
   }
 

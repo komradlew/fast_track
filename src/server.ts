@@ -65,14 +65,15 @@ try {
 }
 
 const db = openDatabaseOrExit(config.dbPath, logger);
+const clock = (): Date => new Date();
 const apiKeys = new ApiKeysRepository(db);
 const coins = new CoinsService({
   coins: new CoinsRepository(db),
   catalog: unavailableCatalog,
   config,
-  clock: () => new Date(),
+  clock,
 });
-const app = createApp({ config, logger, version, db, coins, apiKeys });
+const app = createApp({ config, logger, version, db, coins, apiKeys, clock });
 
 // Later steps, such as the Day 4 scheduler, are inserted before the database.
 const closers: Array<() => Promise<void> | void> = [

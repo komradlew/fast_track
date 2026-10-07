@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 
 import type { Db } from '../../db/connection.js';
+import { isUniqueConstraint } from '../../db/sqliteErrors.js';
 import { ConflictError } from '../../errors/index.js';
 import type { Coin, NewCoin } from './coins.types.js';
 
@@ -21,6 +22,11 @@ interface InsertCoinParams {
   name: string;
   slug: string;
   now: string;
+  maxCoins: number;
+}
+
+export interface CreateCoinOptions {
+  maxCoins: number;
 }
 
 interface SymbolParams {
@@ -51,7 +57,8 @@ const COIN_COLUMNS = 'id, cmc_id, symbol, name, slug, is_active, created_at, upd
 
 const INSERT_COIN =
   'INSERT INTO coins (cmc_id, symbol, name, slug, is_active, created_at, updated_at) ' +
-  'VALUES (@cmcId, @symbol, @name, @slug, 1, @now, @now) ' +
+  'SELECT @cmcId, @symbol, @name, @slug, 1, @now, @now ' +
+  'WHERE (SELECT COUNT(*) FROM coins) < @maxCoins ' +
   'RETURNING ' +
   COIN_COLUMNS;
 
@@ -92,19 +99,17 @@ export class CoinsRepository {
     this.deleteCoin = db.prepare(DELETE_BY_SYMBOL);
   }
 
-  create(input: NewCoin, now: string): Coin {
+  create(input: NewCoin, now: string, options: CreateCoinOptions): Coin {
+    let row: CoinRow | undefined;
     try {
-      const row = this.insertCoin.get({
+      row = this.insertCoin.get({
         cmcId: input.cmcId,
         symbol: input.symbol,
         name: input.name,
         slug: input.slug,
         now,
+        maxCoins: options.maxCoins,
       });
-      if (row === undefined) {
-        throw new Error('Insert did not return a coin');
-      }
-      return toCoin(row);
     } catch (err) {
       if (isUniqueConstraint(err)) {
         throw new ConflictError('Coin ' + input.symbol + ' is already tracked', undefined, {
@@ -113,6 +118,10 @@ export class CoinsRepository {
       }
       throw err;
     }
+    if (row === undefined) {
+      throw new ConflictError('Tracked coin limit of ' + String(options.maxCoins) + ' reached');
+    }
+    return toCoin(row);
   }
 
   findBySymbol(symbol: string): Coin | undefined {
@@ -148,21 +157,6 @@ export class CoinsRepository {
   count(): number {
     return requiredCount(this.countAll.get());
   }
-}
-
-function isUniqueConstraint(err: unknown): err is { message: string } {
-  if (typeof err !== 'object' || err === null || !('message' in err) || typeof err.message !== 'string') {
-    return false;
-  }
-  if (!('code' in err) || err.code !== 'SQLITE_CONSTRAINT_UNIQUE') {
-    return false;
-  }
-  if (err instanceof Database.SqliteError) {
-    return true;
-  }
-  // Jest can evaluate this module twice and load another copy of the native driver.
-  const name = (err as { constructor?: { name?: unknown } }).constructor?.name;
-  return name === 'SqliteError';
 }
 
 function activeParam(isActive: boolean | undefined): number | null {
