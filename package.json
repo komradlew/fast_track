@@ -28,9 +28,11 @@
   },
   "homepage": "https://github.com/komradlew/fast_track#readme",
   "dependencies": {
+    "better-sqlite3": "^13.0.3",
     "express": "^5.2.1"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
     "@types/express": "^5.0.6",
     "@types/jest": "^30.0.0",
     "@types/node": "^22",
