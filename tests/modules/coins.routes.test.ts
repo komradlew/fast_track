@@ -7,11 +7,30 @@ import request from 'supertest';
 import { openDb, type Db } from '../../src/db/connection.js';
 import { migrate } from '../../src/db/migrate.js';
 import { migrations } from '../../src/db/migrations/index.js';
+import { generateApiKey, hashApiKey } from '../../src/modules/auth/apiKey.js';
+import { ApiKeysRepository } from '../../src/modules/auth/apiKeys.repository.js';
 import { CoinsRepository } from '../../src/modules/coins/coins.repository.js';
 import { CoinsService } from '../../src/modules/coins/coins.service.js';
 import { createLogger } from '../../src/utils/logger.js';
 import { createFakeCoinCatalog, type FakeCoinCatalog } from '../helpers/fakeCoinCatalog.js';
 import { buildTestApp } from '../helpers/testApp.js';
+
+type ApiClient = {
+  get: (url: string) => request.Test;
+  post: (url: string) => request.Test;
+  patch: (url: string) => request.Test;
+  delete: (url: string) => request.Test;
+};
+
+function asAdmin(app: Express, key: string): ApiClient {
+  const header = 'Bearer ' + key;
+  return {
+    get: (url) => request(app).get(url).set('Authorization', header),
+    post: (url) => request(app).post(url).set('Authorization', header),
+    patch: (url) => request(app).patch(url).set('Authorization', header),
+    delete: (url) => request(app).delete(url).set('Authorization', header),
+  };
+}
 
 const tempDirs: string[] = [];
 const databases: Db[] = [];
@@ -30,6 +49,7 @@ afterEach(() => {
 
 function openCoinsApp(options?: { maxTrackedCoins?: number; fail?: boolean }): {
   app: Express;
+  api: ApiClient;
   db: Db;
   repo: CoinsRepository;
   catalog: FakeCoinCatalog;
@@ -42,17 +62,25 @@ function openCoinsApp(options?: { maxTrackedCoins?: number; fail?: boolean }): {
   migrate(db, migrations, createLogger('silent'));
 
   const repo = new CoinsRepository(db);
+  const apiKeys = new ApiKeysRepository(db);
   const catalog = createFakeCoinCatalog({ fail: options?.fail });
   let now = new Date('2026-10-07T00:00:00.000Z');
+  const adminKey = generateApiKey();
+  apiKeys.create(
+    { name: 'test-admin', keyHash: hashApiKey(adminKey), role: 'admin' },
+    now.toISOString(),
+  );
   const service = new CoinsService({
     coins: repo,
     catalog,
     config: { maxTrackedCoins: options?.maxTrackedCoins ?? 200 },
     clock: () => now,
   });
+  const app = buildTestApp({ coins: service, apiKeys, clock: () => now });
 
   return {
-    app: buildTestApp({ coins: service }),
+    app,
+    api: asAdmin(app, adminKey),
     db,
     repo,
     catalog,
@@ -91,10 +119,10 @@ test('coins routes stay unmounted until the app receives a service', async () =>
 });
 
 test('GET /status stays public when coin routes are mounted', async () => {
-  const { app } = openCoinsApp();
+  const { app, api } = openCoinsApp();
 
   const status = await request(app).get('/status');
-  const missing = await request(app).get('/api/other');
+  const missing = await api.get('/api/other');
 
   expect(status.status).toBe(200);
   expect(status.body.status).toBe('ok');
@@ -102,9 +130,9 @@ test('GET /status stays public when coin routes are mounted', async () => {
 });
 
 test('GET /api/coins returns an empty page and does not call the catalog', async () => {
-  const { app, catalog } = openCoinsApp();
+  const { api, catalog } = openCoinsApp();
 
-  const response = await request(app).get('/api/coins');
+  const response = await api.get('/api/coins');
 
   expect(response.status).toBe(200);
   expect(response.body).toEqual({ items: [], total: 0, limit: 20, offset: 0 });
@@ -112,14 +140,14 @@ test('GET /api/coins returns an empty page and does not call the catalog', async
 });
 
 test('GET /api/coins applies limit, offset, and isActive', async () => {
-  const { app, setNow } = openCoinsApp();
-  await request(app).post('/api/coins').send({ symbol: 'ETH' });
-  await request(app).post('/api/coins').send({ symbol: 'BTC' });
+  const { api, setNow } = openCoinsApp();
+  await api.post('/api/coins').send({ symbol: 'ETH' });
+  await api.post('/api/coins').send({ symbol: 'BTC' });
   setNow('2026-10-07T01:00:00.000Z');
-  await request(app).patch('/api/coins/btc').send({ isActive: false });
+  await api.patch('/api/coins/btc').send({ isActive: false });
 
-  const page = await request(app).get('/api/coins').query({ limit: '1', offset: '1' });
-  const paused = await request(app).get('/api/coins').query({ isActive: 'false' });
+  const page = await api.get('/api/coins').query({ limit: '1', offset: '1' });
+  const paused = await api.get('/api/coins').query({ isActive: 'false' });
 
   expect(page.status).toBe(200);
   expect(page.body.total).toBe(2);
@@ -133,9 +161,9 @@ test('GET /api/coins applies limit, offset, and isActive', async () => {
 });
 
 test('GET /api/coins rejects a bad query', async () => {
-  const { app } = openCoinsApp();
+  const { api } = openCoinsApp();
 
-  const response = await request(app).get('/api/coins').query({ limit: '0', sort: 'name' });
+  const response = await api.get('/api/coins').query({ limit: '0', sort: 'name' });
 
   expectError(response, 400, 'VALIDATION_ERROR', 'Invalid request');
   expect(response.body.error.details).toEqual([
@@ -145,9 +173,9 @@ test('GET /api/coins rejects a bad query', async () => {
 });
 
 test('POST /api/coins stores the catalog coin and returns 201', async () => {
-  const { app, repo, catalog } = openCoinsApp();
+  const { api, repo, catalog } = openCoinsApp();
 
-  const response = await request(app).post('/api/coins').send({ symbol: 'btc' });
+  const response = await api.post('/api/coins').send({ symbol: 'btc' });
 
   expect(response.status).toBe(201);
   expect(response.headers.location).toBe('/api/coins/BTC');
@@ -159,10 +187,10 @@ test('POST /api/coins stores the catalog coin and returns 201', async () => {
 });
 
 test('POST /api/coins rejects a broken body', async () => {
-  const { app, repo } = openCoinsApp();
+  const { api, repo } = openCoinsApp();
 
-  const extra = await request(app).post('/api/coins').send({ symbol: 'BTC', name: 'Bitcoin' });
-  const broken = await request(app)
+  const extra = await api.post('/api/coins').send({ symbol: 'BTC', name: 'Bitcoin' });
+  const broken = await api
     .post('/api/coins')
     .set('Content-Type', 'application/json')
     .send('{"symbol":');
@@ -174,11 +202,11 @@ test('POST /api/coins rejects a broken body', async () => {
 });
 
 test('POST /api/coins rejects a duplicate before calling the catalog', async () => {
-  const { app, catalog, repo } = openCoinsApp();
-  await request(app).post('/api/coins').send({ symbol: 'BTC' });
+  const { api, catalog, repo } = openCoinsApp();
+  await api.post('/api/coins').send({ symbol: 'BTC' });
   catalog.findBySymbol.mockClear();
 
-  const response = await request(app).post('/api/coins').send({ symbol: 'BTC' });
+  const response = await api.post('/api/coins').send({ symbol: 'BTC' });
 
   expectError(response, 409, 'CONFLICT', 'Coin BTC is already tracked');
   expect(catalog.findBySymbol).not.toHaveBeenCalled();
@@ -186,11 +214,11 @@ test('POST /api/coins rejects a duplicate before calling the catalog', async () 
 });
 
 test('POST /api/coins rejects the tracked-coin limit before calling the catalog', async () => {
-  const { app, catalog, repo } = openCoinsApp({ maxTrackedCoins: 1 });
-  await request(app).post('/api/coins').send({ symbol: 'BTC' });
+  const { api, catalog, repo } = openCoinsApp({ maxTrackedCoins: 1 });
+  await api.post('/api/coins').send({ symbol: 'BTC' });
   catalog.findBySymbol.mockClear();
 
-  const response = await request(app).post('/api/coins').send({ symbol: 'ETH' });
+  const response = await api.post('/api/coins').send({ symbol: 'ETH' });
 
   expectError(response, 409, 'CONFLICT', 'Tracked coin limit of 1 reached');
   expect(catalog.findBySymbol).not.toHaveBeenCalled();
@@ -198,18 +226,18 @@ test('POST /api/coins rejects the tracked-coin limit before calling the catalog'
 });
 
 test('POST /api/coins returns not found when the catalog has no coin', async () => {
-  const { app, repo } = openCoinsApp();
+  const { api, repo } = openCoinsApp();
 
-  const response = await request(app).post('/api/coins').send({ symbol: 'DOGE' });
+  const response = await api.post('/api/coins').send({ symbol: 'DOGE' });
 
   expectError(response, 404, 'NOT_FOUND', 'Coin DOGE not found on CoinMarketCap');
   expect(repo.count()).toBe(0);
 });
 
 test('POST /api/coins leaves the database empty when the catalog fails', async () => {
-  const { app, repo } = openCoinsApp({ fail: true });
+  const { api, repo } = openCoinsApp({ fail: true });
 
-  const response = await request(app).post('/api/coins').send({ symbol: 'BTC' });
+  const response = await api.post('/api/coins').send({ symbol: 'BTC' });
 
   expectError(response, 503, 'EXTERNAL_API_UNAVAILABLE', 'Coin catalog is unavailable');
   expect(response.body.error.context).toBeUndefined();
@@ -217,20 +245,20 @@ test('POST /api/coins leaves the database empty when the catalog fails', async (
 });
 
 test('GET /api/coins/:symbol finds the normalized symbol', async () => {
-  const { app } = openCoinsApp();
-  await request(app).post('/api/coins').send({ symbol: 'BTC' });
+  const { api } = openCoinsApp();
+  await api.post('/api/coins').send({ symbol: 'BTC' });
 
-  const response = await request(app).get('/api/coins/btc');
+  const response = await api.get('/api/coins/btc');
 
   expect(response.status).toBe(200);
   expect(response.body).toEqual(bitcoin);
 });
 
 test('GET /api/coins/:symbol reports a bad symbol and a missing coin', async () => {
-  const { app } = openCoinsApp();
+  const { api } = openCoinsApp();
 
-  const invalid = await request(app).get('/api/coins/B$C');
-  const missing = await request(app).get('/api/coins/DOGE');
+  const invalid = await api.get('/api/coins/B$C');
+  const missing = await api.get('/api/coins/DOGE');
 
   expectError(invalid, 400, 'VALIDATION_ERROR', 'Invalid request');
   expect(invalid.body.error.details).toEqual([
@@ -240,11 +268,11 @@ test('GET /api/coins/:symbol reports a bad symbol and a missing coin', async () 
 });
 
 test('PATCH /api/coins/:symbol updates isActive', async () => {
-  const { app, setNow } = openCoinsApp();
-  await request(app).post('/api/coins').send({ symbol: 'ETH' });
+  const { api, setNow } = openCoinsApp();
+  await api.post('/api/coins').send({ symbol: 'ETH' });
   setNow('2026-10-07T01:00:00.000Z');
 
-  const response = await request(app).patch('/api/coins/eth').send({ isActive: false });
+  const response = await api.patch('/api/coins/eth').send({ isActive: false });
 
   expect(response.status).toBe(200);
   expect(response.body).toMatchObject({
@@ -258,11 +286,11 @@ test('PATCH /api/coins/:symbol updates isActive', async () => {
 });
 
 test('PATCH /api/coins/:symbol rejects a bad body and a missing coin', async () => {
-  const { app } = openCoinsApp();
+  const { api } = openCoinsApp();
 
-  const empty = await request(app).patch('/api/coins/BTC').send({});
-  const typed = await request(app).patch('/api/coins/BTC').send({ isActive: 'yes', extra: 1 });
-  const missing = await request(app).patch('/api/coins/BTC').send({ isActive: true });
+  const empty = await api.patch('/api/coins/BTC').send({});
+  const typed = await api.patch('/api/coins/BTC').send({ isActive: 'yes', extra: 1 });
+  const missing = await api.patch('/api/coins/BTC').send({ isActive: true });
 
   expectError(empty, 400, 'VALIDATION_ERROR', 'Invalid request');
   expect(empty.body.error.details).toEqual([{ field: 'isActive', message: 'required' }]);
@@ -275,8 +303,8 @@ test('PATCH /api/coins/:symbol rejects a bad body and a missing coin', async () 
 });
 
 test('DELETE /api/coins/:symbol returns 204 and removes prices', async () => {
-  const { app, db } = openCoinsApp();
-  await request(app).post('/api/coins').send({ symbol: 'BTC' });
+  const { api, db } = openCoinsApp();
+  await api.post('/api/coins').send({ symbol: 'BTC' });
   const id = db.prepare<[string], { id: number }>('SELECT id FROM coins WHERE symbol = ?').get('BTC')?.id;
   db.prepare(
     'INSERT INTO prices (coin_id, quote_currency, price, source_updated_at, fetched_at) VALUES (@coinId, @quote, @price, @now, @now)',
@@ -287,8 +315,8 @@ test('DELETE /api/coins/:symbol returns 204 and removes prices', async () => {
     now: '2026-10-07T00:00:00.000Z',
   });
 
-  const response = await request(app).delete('/api/coins/btc');
-  const again = await request(app).delete('/api/coins/BTC');
+  const response = await api.delete('/api/coins/btc');
+  const again = await api.delete('/api/coins/BTC');
 
   expect(response.status).toBe(204);
   expect(response.text).toBe('');

@@ -10,7 +10,9 @@
     "dev:run": "node --watch --env-file-if-exists=.env dist/server.js",
     "typecheck": "tsc --noEmit",
     "test": "jest",
-    "test:coverage": "jest --coverage"
+    "test:coverage": "jest --coverage",
+    "apikey:create": "node --env-file-if-exists=.env dist/scripts/create-api-key.js",
+    "apikey:revoke": "node --env-file-if-exists=.env dist/scripts/revoke-api-key.js"
   },
   "repository": {
     "type": "git",
