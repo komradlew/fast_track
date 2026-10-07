@@ -40,6 +40,9 @@ export function errorHandler(logger: Logger): ErrorRequestHandler {
     if (body.details !== undefined) {
       error.details = body.details;
     }
+    if (body.statusCode === 401) {
+      res.setHeader('WWW-Authenticate', 'Bearer');
+    }
 
     res.status(body.statusCode).json({ error });
   };

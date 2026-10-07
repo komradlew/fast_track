@@ -10,7 +10,9 @@
     "dev:run": "node --watch --env-file-if-exists=.env dist/server.js",
     "typecheck": "tsc --noEmit",
     "test": "jest",
-    "test:coverage": "jest --coverage"
+    "test:coverage": "jest --coverage",
+    "apikey:create": "node --env-file-if-exists=.env dist/scripts/create-api-key.js",
+    "apikey:revoke": "node --env-file-if-exists=.env dist/scripts/revoke-api-key.js"
   },
   "repository": {
     "type": "git",
@@ -28,9 +30,11 @@
   },
   "homepage": "https://github.com/komradlew/fast_track#readme",
   "dependencies": {
+    "better-sqlite3": "^13.0.3",
     "express": "^5.2.1"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
     "@types/express": "^5.0.6",
     "@types/jest": "^30.0.0",
     "@types/node": "^22",
