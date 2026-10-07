@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import { createApp } from './app.js';
 import { loadConfig } from './config/index.js';
+import { unavailableCatalog } from './modules/coins/unavailableCatalog.js';
 import { createLogger } from './utils/logger.js';
 
 function loadOrExit() {
@@ -25,6 +26,12 @@ function readPackageVersion(): string {
 
 const config = loadOrExit();
 const logger = createLogger(config.logLevel);
+const coinCatalog = unavailableCatalog;
+
+if (typeof coinCatalog.findBySymbol !== 'function') {
+  logger.error('Coin catalog is not configured');
+  process.exit(1);
+}
 
 let version: string;
 try {

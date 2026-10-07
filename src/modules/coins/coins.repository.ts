@@ -106,7 +106,7 @@ export class CoinsRepository {
       }
       return toCoin(row);
     } catch (err) {
-      if (err instanceof Database.SqliteError && err.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+      if (isUniqueConstraint(err)) {
         throw new ConflictError('Coin ' + input.symbol + ' is already tracked', undefined, {
           constraint: err.message,
         });
@@ -148,6 +148,21 @@ export class CoinsRepository {
   count(): number {
     return requiredCount(this.countAll.get());
   }
+}
+
+function isUniqueConstraint(err: unknown): err is { message: string } {
+  if (typeof err !== 'object' || err === null || !('message' in err) || typeof err.message !== 'string') {
+    return false;
+  }
+  if (!('code' in err) || err.code !== 'SQLITE_CONSTRAINT_UNIQUE') {
+    return false;
+  }
+  if (err instanceof Database.SqliteError) {
+    return true;
+  }
+  // Jest can evaluate this module twice and load another copy of the native driver.
+  const name = (err as { constructor?: { name?: unknown } }).constructor?.name;
+  return name === 'SqliteError';
 }
 
 function activeParam(isActive: boolean | undefined): number | null {
