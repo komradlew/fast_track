@@ -1,6 +1,7 @@
 import express, { Router } from 'express';
 
 import type { AppConfig } from './config/index.js';
+import type { Db } from './db/connection.js';
 import { authenticate } from './middlewares/authenticate.js';
 import { errorHandler } from './middlewares/errorHandler.js';
 import { notFound } from './middlewares/notFound.js';
@@ -16,6 +17,7 @@ export interface AppDeps {
   config: AppConfig;
   logger: Logger;
   version: string;
+  db: Db;
   coins?: CoinsService;
   apiKeys?: ApiKeysRepository;
   clock?: () => Date;
@@ -28,7 +30,7 @@ export function createApp(deps: AppDeps): express.Express {
   app.use(requestId(deps.logger));
   app.use(requestLogger);
   app.use(express.json({ limit: '100kb' }));
-  app.use('/status', createStatusRouter(deps.version));
+  app.use('/status', createStatusRouter(deps.version, deps.db));
 
   if (deps.coins !== undefined) {
     if (deps.apiKeys === undefined) {

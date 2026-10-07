@@ -423,6 +423,7 @@ describe('coin API', () => {
 
     expect(response.status).toBe(200);
     expect(response.body.status).toBe('ok');
+    expect(response.body.checks).toEqual({ db: 'ok' });
   });
 });
 

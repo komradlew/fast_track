@@ -4,6 +4,7 @@ import request from 'supertest';
 
 import type { Logger } from '../src/utils/logger.js';
 import { buildTestApp } from './helpers/testApp.js';
+import { createTestContext } from './helpers/testContext.js';
 
 const packageVersion = JSON.parse(readFileSync(path.resolve(__dirname, '../package.json'), 'utf8')) as {
   version: string;
@@ -14,6 +15,7 @@ test('GET /status returns ok and a valid timestamp', async () => {
 
   expect(response.status).toBe(200);
   expect(response.body.status).toBe('ok');
+  expect(response.body.checks).toEqual({ db: 'ok' });
   expect(response.body.version).toBe(packageVersion.version);
   expect(response.body.uptimeSec).toEqual(expect.any(Number));
   expect(new Date(response.body.timestamp).toISOString()).toBe(response.body.timestamp);
@@ -83,6 +85,62 @@ test('logs /status rather than the path rewritten by the router', async () => {
       expect.objectContaining({ msg: 'Request completed', method: 'GET', path: '/status', statusCode: 200 }),
     ]),
   );
+});
+
+test('GET /status reports a closed database as degraded and omits the SQLite error', async () => {
+  const records: Array<Record<string, unknown>> = [];
+  const remember =
+    (level: string, bindings: Record<string, unknown> = {}) =>
+    (msg: string, context?: Record<string, unknown>) => {
+      records.push({ level, msg, ...bindings, ...context });
+    };
+  const logger: Logger = {
+    error: remember('error'),
+    warn: remember('warn'),
+    info: remember('info'),
+    debug: remember('debug'),
+    child(bindings) {
+      return {
+        error: remember('error', bindings),
+        warn: remember('warn', bindings),
+        info: remember('info', bindings),
+        debug: remember('debug', bindings),
+        child() {
+          return this;
+        },
+      };
+    },
+  };
+
+  const ctx = await createTestContext({ logger });
+  ctx.close();
+
+  const response = await request(ctx.app).get('/status');
+  const failure = records.find((record) => record.msg === 'Database check failed');
+  const body = JSON.stringify(response.body);
+
+  expect(response.status).toBe(503);
+  expect(response.body).toEqual({
+    status: 'degraded',
+    checks: { db: 'error' },
+    uptimeSec: expect.any(Number),
+    timestamp: expect.any(String),
+    version: packageVersion.version,
+  });
+  expect(new Date(response.body.timestamp).toISOString()).toBe(response.body.timestamp);
+  expect(failure).toEqual(
+    expect.objectContaining({
+      level: 'error',
+      msg: 'Database check failed',
+      requestId: response.headers['x-request-id'],
+      err: expect.any(Error),
+    }),
+  );
+  expect(failure?.err).toBeInstanceOf(Error);
+  if (failure?.err instanceof Error && failure.err.message !== '') {
+    expect(body).not.toContain(failure.err.message);
+  }
+  expect(body).not.toMatch(/sqlite/i);
 });
 
 test('POST /status is not found', async () => {

@@ -65,6 +65,7 @@ export async function createTestContext(opts: TestContextOptions = {}): Promise<
     const app = buildTestApp({
       config,
       logger,
+      db,
       coins,
       apiKeys,
       clock: () => now,
