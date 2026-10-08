@@ -1,0 +1,55 @@
+{
+  "data": [
+    {
+      "id": 1,
+      "name": "Bitcoin",
+      "symbol": "BTC",
+      "slug": "bitcoin",
+      "rank": 1,
+      "is_active": 1,
+      "first_historical_data": "2010-07-13T00:05:00.000Z",
+      "last_historical_data": "2026-10-08T07:05:00.000Z",
+      "platform": null
+    },
+    {
+      "id": 38552,
+      "name": "Bitcoin Base",
+      "symbol": "BTC",
+      "slug": "bitcoin-base",
+      "rank": 3194,
+      "is_active": 1,
+      "first_historical_data": "2025-09-29T23:30:00.000Z",
+      "last_historical_data": "2026-10-08T07:05:00.000Z",
+      "platform": {
+        "id": 199,
+        "name": "Base",
+        "symbol": "-",
+        "slug": "base",
+        "token_address": "0xFaF1C31F6855E91B1a905761C81A79e4966e4709"
+      }
+    },
+    {
+      "id": 31652,
+      "name": "batcat",
+      "symbol": "BTC",
+      "slug": "batcat",
+      "rank": null,
+      "is_active": 0,
+      "platform": {
+        "id": 16,
+        "name": "Solana",
+        "symbol": "SOL",
+        "slug": "solana",
+        "token_address": "EtBc6gkCvsB9c6f5wSbwG8wPjRqXMB5euptK6bqG1R4X"
+      }
+    }
+  ],
+  "status": {
+    "timestamp": "2026-10-08T07:11:09.499Z",
+    "error_code": 0,
+    "error_message": null,
+    "elapsed": 1,
+    "credit_count": 1,
+    "notice": null
+  }
+}
