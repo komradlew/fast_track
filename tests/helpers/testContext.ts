@@ -12,6 +12,9 @@ import { ApiKeysRepository } from '../../src/modules/auth/apiKeys.repository.js'
 import type { CoinCatalog } from '../../src/modules/coins/coinCatalog.js';
 import { CoinsRepository } from '../../src/modules/coins/coins.repository.js';
 import { CoinsService } from '../../src/modules/coins/coins.service.js';
+import type { PriceProvider } from '../../src/modules/prices/priceProvider.js';
+import { PricesRepository } from '../../src/modules/prices/prices.repository.js';
+import { PricesService } from '../../src/modules/prices/prices.service.js';
 import type { Logger } from '../../src/utils/logger.js';
 import { createLogger } from '../../src/utils/logger.js';
 import { createFakeCoinCatalog } from './fakeCoinCatalog.js';
@@ -21,6 +24,7 @@ export const testNow = '2026-10-07T00:00:00.000Z';
 
 export interface TestContextOptions {
   catalog?: CoinCatalog;
+  provider?: PriceProvider;
   config?: Partial<AppConfig>;
   logger?: Logger;
 }
@@ -62,11 +66,23 @@ export async function createTestContext(opts: TestContextOptions = {}): Promise<
       config,
       clock: () => now,
     });
+    const prices =
+      opts.provider === undefined
+        ? undefined
+        : new PricesService({
+            coins: new CoinsRepository(db),
+            prices: new PricesRepository(db),
+            provider: opts.provider,
+            config,
+            clock: () => now,
+            logger,
+          });
     const app = buildTestApp({
       config,
       logger,
       db,
       coins,
+      prices,
       apiKeys,
       clock: () => now,
     });
@@ -88,6 +104,10 @@ export async function createTestContext(opts: TestContextOptions = {}): Promise<
         const mocked = catalog.findBySymbol as { mockClear?: () => void };
         if (typeof mocked.mockClear === 'function') {
           mocked.mockClear();
+        }
+        const quotes = opts.provider?.getQuotes as { mockClear?: () => void } | undefined;
+        if (typeof quotes?.mockClear === 'function') {
+          quotes.mockClear();
         }
       },
       close() {

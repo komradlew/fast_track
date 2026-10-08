@@ -32,6 +32,14 @@ function createHandlerApp(logger: Logger = createLogger('silent')): Express {
       context: { url: 'https://api.example' },
     });
   });
+  app.get('/limited', () => {
+    throw new ExternalApiError('CoinMarketCap rate limit exceeded', {
+      statusCode: 503,
+      code: 'EXTERNAL_API_RATE_LIMITED',
+      retryAfterSec: 60,
+      context: { endpoint: '/v3/cryptocurrency/quotes/latest', httpStatus: 429, cmcErrorCode: 1008 },
+    });
+  });
   app.get('/sent', (_req, res, next) => {
     res.json({ ok: true });
     next(new Error('late'));
@@ -112,15 +120,46 @@ test('a body over 100kb returns PAYLOAD_TOO_LARGE', async () => {
   expect(response.body.error.message).toBe('Request body is too large');
 });
 
-test('ExternalApiError hides context from the client', async () => {
-  const response = await request(createHandlerApp()).get('/upstream');
+test('ExternalApiError hides context from the client and logs it', async () => {
+  const error = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+  try {
+    const response = await request(createHandlerApp(createLogger('info'))).get('/upstream');
+
+    expect(response.status).toBe(503);
+    expect(response.body.error).toEqual({
+      code: 'EXTERNAL_API_ERROR',
+      message: 'upstream down',
+      requestId: expect.any(String),
+    });
+    expect(response.headers['retry-after']).toBeUndefined();
+    expect(JSON.stringify(response.body)).not.toContain('api.example');
+
+    const failed = error.mock.calls
+      .map((call) => JSON.parse(String(call[0])) as Record<string, unknown>)
+      .find((entry) => entry.msg === 'Request failed');
+    expect(failed).toMatchObject({
+      level: 'error',
+      code: 'EXTERNAL_API_ERROR',
+      context: { url: 'https://api.example' },
+    });
+  } finally {
+    error.mockRestore();
+  }
+});
+
+test('ExternalApiError with retryAfterSec sends Retry-After', async () => {
+  const response = await request(createHandlerApp()).get('/limited');
 
   expect(response.status).toBe(503);
-  expect(response.body.error).toMatchObject({
-    code: 'EXTERNAL_API_ERROR',
-    message: 'upstream down',
+  expect(response.headers['retry-after']).toBe('60');
+  expect(response.body).toEqual({
+    error: {
+      code: 'EXTERNAL_API_RATE_LIMITED',
+      message: 'CoinMarketCap rate limit exceeded',
+      requestId: expect.any(String),
+    },
   });
-  expect(JSON.stringify(response.body)).not.toContain('api.example');
+  expect(JSON.stringify(response.body)).not.toContain('quotes/latest');
 });
 
 test('does not write a second response when headers are already sent', async () => {

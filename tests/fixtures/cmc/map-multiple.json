@@ -1,0 +1,55 @@
+{
+  "data": [
+    {
+      "id": 7083,
+      "name": "Uniswap",
+      "symbol": "UNI",
+      "slug": "uniswap",
+      "rank": 21,
+      "is_active": 1,
+      "first_historical_data": "2020-09-17T01:10:00.000Z",
+      "last_historical_data": "2026-10-08T07:05:00.000Z",
+      "platform": {
+        "id": 1,
+        "name": "Ethereum",
+        "symbol": "ETH",
+        "slug": "ethereum",
+        "token_address": "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"
+      }
+    },
+    {
+      "id": 33433,
+      "name": "UNI",
+      "symbol": "UNI",
+      "slug": "uni-sui",
+      "rank": 3170,
+      "is_active": 1,
+      "first_historical_data": "2024-10-14T08:30:00.000Z",
+      "last_historical_data": "2026-10-08T07:05:00.000Z",
+      "platform": {
+        "id": 176,
+        "name": "Sui Network",
+        "symbol": "SUI",
+        "slug": "sui",
+        "token_address": "0xaf9e228fd0292e2a27b4859bc57a2f3a9faedb9341b6307c84fef163e44790cc::uni::UNI"
+      }
+    },
+    {
+      "id": 126,
+      "name": "UniteCoin",
+      "symbol": "UNI",
+      "slug": "unitecoin",
+      "rank": null,
+      "is_active": 0,
+      "platform": null
+    }
+  ],
+  "status": {
+    "timestamp": "2026-10-08T07:11:09.997Z",
+    "error_code": 0,
+    "error_message": null,
+    "elapsed": 1,
+    "credit_count": 1,
+    "notice": null
+  }
+}

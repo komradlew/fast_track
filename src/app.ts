@@ -10,6 +10,8 @@ import { requestLogger } from './middlewares/requestLogger.js';
 import type { ApiKeysRepository } from './modules/auth/apiKeys.repository.js';
 import { createCoinsRouter } from './modules/coins/coins.routes.js';
 import type { CoinsService } from './modules/coins/coins.service.js';
+import { createPricesRouter } from './modules/prices/prices.routes.js';
+import type { PricesService } from './modules/prices/prices.service.js';
 import { createStatusRouter } from './modules/status/status.routes.js';
 import type { Logger } from './utils/logger.js';
 
@@ -19,6 +21,7 @@ export interface AppDeps {
   version: string;
   db: Db;
   coins: CoinsService;
+  prices: PricesService;
   apiKeys: ApiKeysRepository;
   clock: () => Date;
 }
@@ -35,6 +38,7 @@ export function createApp(deps: AppDeps): express.Express {
   const apiRouter = Router();
   apiRouter.use(authenticate(deps.apiKeys, deps.clock));
   apiRouter.use('/coins', createCoinsRouter(deps.coins));
+  apiRouter.use('/coins', createPricesRouter(deps.prices));
   app.use('/api', apiRouter);
 
   app.use(notFound);

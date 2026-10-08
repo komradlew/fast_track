@@ -6,10 +6,13 @@ import { loadConfig } from './config/index.js';
 import { openDb, type Db } from './db/connection.js';
 import { migrate } from './db/migrate.js';
 import { migrations } from './db/migrations/index.js';
+import { CmcClient } from './integrations/coinmarketcap/cmc.client.js';
+import { closeCmcHttp, createCmcHttp } from './integrations/coinmarketcap/cmc.http.js';
 import { ApiKeysRepository } from './modules/auth/apiKeys.repository.js';
 import { CoinsRepository } from './modules/coins/coins.repository.js';
 import { CoinsService } from './modules/coins/coins.service.js';
-import { unavailableCatalog } from './modules/coins/unavailableCatalog.js';
+import { PricesRepository } from './modules/prices/prices.repository.js';
+import { PricesService } from './modules/prices/prices.service.js';
 import { createLogger, type Logger } from './utils/logger.js';
 
 function loadOrExit() {
@@ -67,16 +70,34 @@ try {
 const db = openDatabaseOrExit(config.dbPath, logger);
 const clock = (): Date => new Date();
 const apiKeys = new ApiKeysRepository(db);
+const coinsRepository = new CoinsRepository(db);
+const cmcHttp = createCmcHttp(config);
+const cmcClient = new CmcClient({
+  http: cmcHttp,
+  logger,
+  quoteCurrency: config.quoteCurrency,
+});
 const coins = new CoinsService({
-  coins: new CoinsRepository(db),
-  catalog: unavailableCatalog,
+  coins: coinsRepository,
+  catalog: cmcClient,
   config,
   clock,
 });
-const app = createApp({ config, logger, version, db, coins, apiKeys, clock });
+const prices = new PricesService({
+  coins: coinsRepository,
+  prices: new PricesRepository(db),
+  provider: cmcClient,
+  config,
+  clock,
+  logger,
+});
+const app = createApp({ config, logger, version, db, coins, prices, apiKeys, clock });
 
 // Later steps, such as the Day 4 scheduler, are inserted before the database.
 const closers: Array<() => Promise<void> | void> = [
+  () => {
+    closeCmcHttp(cmcHttp);
+  },
   () => {
     db.close();
   },

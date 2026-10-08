@@ -5,8 +5,7 @@ import path from 'node:path';
 import { openDb, type Db } from '../../src/db/connection.js';
 import { migrate } from '../../src/db/migrate.js';
 import { migrations } from '../../src/db/migrations/index.js';
-import { ConflictError, ExternalApiError, NotFoundError } from '../../src/errors/index.js';
-import { unavailableCatalog } from '../../src/modules/coins/unavailableCatalog.js';
+import { ConflictError, NotFoundError } from '../../src/errors/index.js';
 import { CoinsService } from '../../src/modules/coins/coins.service.js';
 import { CoinsRepository } from '../../src/modules/coins/coins.repository.js';
 import type { Logger } from '../../src/utils/logger.js';
@@ -214,13 +213,4 @@ test('get, list, setActive and remove use the repository', async () => {
   expect(() => service.get('ETH')).toThrow(NotFoundError);
   expect(() => service.setActive('ETH', true)).toThrow(NotFoundError);
   expect(() => service.remove('ETH')).toThrow(NotFoundError);
-});
-
-test('unavailableCatalog rejects every lookup', async () => {
-  await expect(unavailableCatalog.findBySymbol('BTC')).rejects.toBeInstanceOf(ExternalApiError);
-  await expect(unavailableCatalog.findBySymbol('BTC')).rejects.toMatchObject({
-    statusCode: 503,
-    code: 'EXTERNAL_API_UNAVAILABLE',
-    message: 'Coin catalog is not configured yet',
-  });
 });
