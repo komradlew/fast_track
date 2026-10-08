@@ -118,22 +118,22 @@ function countPrices(db: Db): number {
   return rowCount.n;
 }
 
-test('insertMany inserts new quotes and ignores the same source time', () => {
+test('insertMany inserts new quotes and refreshes fetched_at for the same source time', () => {
   const { db, coins, prices } = openRepos();
   const coin = createCoin(coins, bitcoin());
   const first = row(coin.id, t1, fetchedEarly);
   const second = row(coin.id, t2, fetchedLate);
 
-  expect(prices.insertMany([first, second])).toBe(2);
-  expect(prices.insertMany([first, second])).toBe(0);
+  expect(prices.insertMany([first, second])).toEqual({ inserted: 2, updated: 0 });
+  expect(prices.insertMany([first, second])).toEqual({ inserted: 0, updated: 2 });
   expect(prices.findLatest(coin.id, 'USD')).toEqual(stored(t2, fetchedLate));
 
-  expect(prices.insertMany([row(coin.id, t2, fetchedEarly)])).toBe(0);
-  expect(prices.findLatest(coin.id, 'USD')?.fetchedAt).toBe(fetchedLate);
+  expect(prices.insertMany([row(coin.id, t2, fetchedEarly, { price: 10 })])).toEqual({ inserted: 0, updated: 1 });
+  expect(prices.findLatest(coin.id, 'USD')).toEqual(stored(t2, fetchedEarly));
 
-  expect(prices.insertMany([row(coin.id, t3, fetchedEarly)])).toBe(1);
+  expect(prices.insertMany([row(coin.id, t3, fetchedEarly)])).toEqual({ inserted: 1, updated: 0 });
   expect(countPrices(db)).toBe(3);
-  expect(prices.insertMany([])).toBe(0);
+  expect(prices.insertMany([])).toEqual({ inserted: 0, updated: 0 });
 });
 
 test('insertMany rolls back the batch when a coin is missing', () => {

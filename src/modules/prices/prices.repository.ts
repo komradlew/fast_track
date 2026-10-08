@@ -9,6 +9,11 @@ export interface PriceInsert {
   fetchedAt: string;
 }
 
+export interface PriceWriteCounts {
+  inserted: number;
+  updated: number;
+}
+
 export type StoredPrice = Omit<Quote, 'cmcId' | 'symbol'> & {
   fetchedAt: string;
 };
@@ -42,6 +47,11 @@ interface InsertPriceParams {
 interface LatestParams {
   coinId: number;
   quoteCurrency: string;
+}
+
+interface TouchParams extends LatestParams {
+  sourceUpdatedAt: string;
+  fetchedAt: string;
 }
 
 interface RangeParams extends LatestParams {
@@ -83,6 +93,10 @@ const INSERT_PRICE =
   '@percentChange1h, @percentChange24h, @percentChange7d, @sourceUpdatedAt, @fetchedAt' +
   ')';
 
+const TOUCH_FETCHED_AT =
+  'UPDATE prices SET fetched_at = @fetchedAt ' +
+  'WHERE coin_id = @coinId AND quote_currency = @quoteCurrency AND source_updated_at = @sourceUpdatedAt';
+
 const SELECT_LATEST =
   'SELECT ' +
   PRICE_COLUMNS +
@@ -111,7 +125,7 @@ const SELECT_HISTORY_DESC =
 const COUNT_HISTORY = 'SELECT COUNT(*) AS total FROM prices ' + HISTORY_WHERE;
 
 export class PricesRepository {
-  private readonly insertAll: (rows: readonly PriceInsert[]) => number;
+  private readonly insertAll: (rows: readonly PriceInsert[]) => PriceWriteCounts;
   private readonly selectLatest: Database.Statement<[LatestParams], PriceRow>;
   private readonly selectHistoryAsc: Database.Statement<[HistoryParams], PriceRow>;
   private readonly selectHistoryDesc: Database.Statement<[HistoryParams], PriceRow>;
@@ -119,12 +133,24 @@ export class PricesRepository {
 
   constructor(db: Db) {
     const insertPrice = db.prepare<InsertPriceParams>(INSERT_PRICE);
+    const touchFetchedAt = db.prepare<TouchParams>(TOUCH_FETCHED_AT);
     this.insertAll = db.transaction((rows: readonly PriceInsert[]) => {
       let inserted = 0;
+      let updated = 0;
       for (const row of rows) {
-        inserted += insertPrice.run(toInsertParams(row)).changes;
+        const params = toInsertParams(row);
+        if (insertPrice.run(params).changes > 0) {
+          inserted += 1;
+          continue;
+        }
+        updated += touchFetchedAt.run({
+          coinId: params.coinId,
+          quoteCurrency: params.quoteCurrency,
+          sourceUpdatedAt: params.sourceUpdatedAt,
+          fetchedAt: params.fetchedAt,
+        }).changes;
       }
-      return inserted;
+      return { inserted, updated };
     });
     this.selectLatest = db.prepare(SELECT_LATEST);
     this.selectHistoryAsc = db.prepare(SELECT_HISTORY_ASC);
@@ -132,7 +158,8 @@ export class PricesRepository {
     this.countHistoryRows = db.prepare(COUNT_HISTORY);
   }
 
-  insertMany(rows: readonly PriceInsert[]): number {
+  // A missing coin fails the whole batch. A duplicate source time only refreshes fetched_at.
+  insertMany(rows: readonly PriceInsert[]): PriceWriteCounts {
     return this.insertAll(rows);
   }
 
