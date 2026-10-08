@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { ExternalApiError, type ExternalApiCode } from '../../src/errors/index.js';
-import { isRetryable, toExternalApiError } from '../../src/integrations/coinmarketcap/cmc.errors.js';
+import { classify } from '../../src/integrations/coinmarketcap/cmc.errors.js';
 
 const SECRET = 'secret-test-key';
 
@@ -62,8 +62,12 @@ function expectMapped(
     retryAfterSec?: number;
   },
 ): ExternalApiError {
-  expect(isRetryable(error)).toBe(expected.retryable);
-  const mapped = toExternalApiError(error);
+  const result = classify(error);
+  if (result === null) {
+    throw new Error('expected a classified error');
+  }
+  expect(result.retryable).toBe(expected.retryable);
+  const mapped = result.error;
   expect(mapped).toBeInstanceOf(ExternalApiError);
   expect(mapped.statusCode).toBe(expected.statusCode);
   expect(mapped.code).toBe(expected.code);
@@ -71,7 +75,7 @@ function expectMapped(
   expect(mapped.retryAfterSec).toBe(expected.retryAfterSec);
   expect(mapped.message).not.toContain(SECRET);
   expect(JSON.stringify(mapped.context)).not.toContain(SECRET);
-  expect(isRetryable(mapped)).toBe(expected.retryable);
+  expect(classify(mapped)?.retryable).toBe(false);
   return mapped;
 }
 
@@ -183,8 +187,17 @@ describe('CMC error mapping', () => {
     });
   });
 
+  test.each(['ERR_BAD_RESPONSE', 'ERR_BAD_REQUEST'])('%s from an oversized body does not retry', (code) => {
+    expectMapped(networkError(code), {
+      statusCode: 502,
+      code: 'EXTERNAL_API_ERROR',
+      message: 'CoinMarketCap is unavailable',
+      retryable: false,
+    });
+  });
+
   test('an invalid key fixture becomes 503 and the context has no secret', () => {
-    const mapped = toExternalApiError(
+    const result = classify(
       {
         message: SECRET,
         code: 'ERR_BAD_REQUEST',
@@ -201,6 +214,10 @@ describe('CMC error mapping', () => {
       },
       2,
     );
+    if (result === null) {
+      throw new Error('expected a classified error');
+    }
+    const mapped = result.error;
 
     expect(mapped.statusCode).toBe(503);
     expect(mapped.code).toBe('EXTERNAL_API_UNAVAILABLE');
@@ -213,21 +230,15 @@ describe('CMC error mapping', () => {
       attempt: 2,
     });
     expect(JSON.stringify(mapped.context)).not.toContain(SECRET);
-    expect(isRetryable(mapped)).toBe(false);
+    expect(result.retryable).toBe(false);
   });
 
-  test('a canceled request is rethrown and is not retryable', () => {
+  test('a canceled request is not classified', () => {
     const canceled = Object.assign(new Error('canceled'), {
       code: 'ERR_CANCELED',
       config: { headers: { 'X-CMC_PRO_API_KEY': SECRET } },
     });
 
-    expect(isRetryable(canceled)).toBe(false);
-    try {
-      toExternalApiError(canceled);
-      throw new Error('expected the canceled error to be rethrown');
-    } catch (caught) {
-      expect(caught).toBe(canceled);
-    }
+    expect(classify(canceled)).toBeNull();
   });
 });

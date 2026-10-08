@@ -76,6 +76,7 @@ const cmcClient = new CmcClient({
   http: cmcHttp,
   logger,
   quoteCurrency: config.quoteCurrency,
+  deadlineMs: config.cmcDeadlineMs,
 });
 const coins = new CoinsService({
   coins: coinsRepository,

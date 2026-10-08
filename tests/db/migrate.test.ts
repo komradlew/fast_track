@@ -4,6 +4,7 @@ import path from 'node:path';
 
 import { openDb, type Db } from '../../src/db/connection.js';
 import { migrate, type Migration } from '../../src/db/migrate.js';
+import { m001 } from '../../src/db/migrations/001_init.js';
 import { migrations } from '../../src/db/migrations/index.js';
 import type { Logger } from '../../src/utils/logger.js';
 
@@ -61,6 +62,14 @@ function tableNames(db: Db): string[] {
     .map((row) => row.name);
 }
 
+function fetchedAtIndex(db: Db): string | undefined {
+  return db
+    .prepare<[], { name: string }>(
+      "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_prices_fetched_at'",
+    )
+    .get()?.name;
+}
+
 function columnNames(db: Db, table: string): string[] {
   return db
     .prepare<[string], { name: string }>('SELECT name FROM pragma_table_info(?) ORDER BY cid')
@@ -72,7 +81,7 @@ test('applies every migration on an empty database', () => {
   const db = openTempDb();
   const logger = createLogger();
 
-  expect(migrate(db, migrations, logger)).toEqual(['001_init']);
+  expect(migrate(db, migrations, logger)).toEqual(['001_init', '002_prices_fetched_index']);
   expect(tableNames(db)).toEqual(['api_keys', 'coins', 'prices', 'schema_migrations']);
   expect(columnNames(db, 'coins')).toEqual([
     'id',
@@ -116,11 +125,21 @@ test('applies every migration on an empty database', () => {
   ]);
 
   const applied = db
-    .prepare<[], { name: string; applied_at: string }>('SELECT name, applied_at FROM schema_migrations')
-    .get();
-  expect(applied?.name).toBe('001_init');
-  expect(applied?.applied_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
-  expect(logger.infos).toEqual([{ msg: 'Applied migration', context: { name: '001_init' } }]);
+    .prepare<[], { name: string; applied_at: string }>('SELECT name, applied_at FROM schema_migrations ORDER BY name')
+    .all();
+  expect(applied.map((row) => row.name)).toEqual(['001_init', '002_prices_fetched_index']);
+  expect(applied[0]?.applied_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  expect(logger.infos).toEqual([
+    { msg: 'Applied migration', context: { name: '001_init' } },
+    { msg: 'Applied migration', context: { name: '002_prices_fetched_index' } },
+  ]);
+  expect(
+    db
+      .prepare<[], { name: string }>(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_prices_fetched_at'",
+      )
+      .get()?.name,
+  ).toBe('idx_prices_fetched_at');
 });
 
 test('a second connection applies nothing after the first has migrated', () => {
@@ -132,9 +151,12 @@ test('a second connection applies nothing after the first has migrated', () => {
   databases.push(first, second);
   const logger = createLogger();
 
-  expect(migrate(first, migrations, logger)).toEqual(['001_init']);
+  expect(migrate(first, migrations, logger)).toEqual(['001_init', '002_prices_fetched_index']);
   expect(migrate(second, migrations, logger)).toEqual([]);
-  expect(logger.infos).toEqual([{ msg: 'Applied migration', context: { name: '001_init' } }]);
+  expect(logger.infos).toEqual([
+    { msg: 'Applied migration', context: { name: '001_init' } },
+    { msg: 'Applied migration', context: { name: '002_prices_fetched_index' } },
+  ]);
 });
 
 test('a second run applies nothing', () => {
@@ -143,14 +165,17 @@ test('a second run applies nothing', () => {
 
   migrate(db, migrations, logger);
   expect(migrate(db, migrations, logger)).toEqual([]);
-  expect(logger.infos).toEqual([{ msg: 'Applied migration', context: { name: '001_init' } }]);
+  expect(logger.infos).toEqual([
+    { msg: 'Applied migration', context: { name: '001_init' } },
+    { msg: 'Applied migration', context: { name: '002_prices_fetched_index' } },
+  ]);
 });
 
 test('rolls back a migration whose SQL fails', () => {
   const db = openTempDb();
   const logger = createLogger();
   const broken: Migration = {
-    name: '002_broken',
+    name: '003_broken',
     up: `
       CREATE TABLE partial_prices (id INTEGER PRIMARY KEY);
       NOT VALID SQL;
@@ -164,9 +189,9 @@ test('rolls back a migration whose SQL fails', () => {
     .prepare<[], { name: string }>('SELECT name FROM schema_migrations ORDER BY name')
     .all()
     .map((row) => row.name);
-  expect(names).toEqual(['001_init']);
+  expect(names).toEqual(['001_init', '002_prices_fetched_index']);
   expect(tableNames(db)).not.toContain('partial_prices');
-  expect(logger.infos.map((entry) => entry.context?.name)).toEqual(['001_init']);
+  expect(logger.infos.map((entry) => entry.context?.name)).toEqual(['001_init', '002_prices_fetched_index']);
 });
 
 test('rolls back every new migration when a later one in the same run fails', () => {
@@ -186,20 +211,41 @@ test('applies only a new migration on an existing database', () => {
   const db = openTempDb();
   const logger = createLogger();
   const extra: Migration = {
-    name: '002_extra',
+    name: '003_extra',
     up: 'CREATE TABLE extra_marker (id INTEGER PRIMARY KEY);',
   };
 
   migrate(db, migrations, logger);
-  expect(migrate(db, [...migrations, extra], logger)).toEqual(['002_extra']);
+  expect(migrate(db, [...migrations, extra], logger)).toEqual(['003_extra']);
   expect(tableNames(db)).toContain('extra_marker');
   expect(
     db
       .prepare<[], { name: string }>('SELECT name FROM schema_migrations ORDER BY name')
       .all()
       .map((row) => row.name),
-  ).toEqual(['001_init', '002_extra']);
-  expect(logger.infos.map((entry) => entry.context?.name)).toEqual(['001_init', '002_extra']);
+  ).toEqual(['001_init', '002_prices_fetched_index', '003_extra']);
+  expect(logger.infos.map((entry) => entry.context?.name)).toEqual([
+    '001_init',
+    '002_prices_fetched_index',
+    '003_extra',
+  ]);
+});
+
+test('applies 002 on a database that only has 001', () => {
+  const db = openTempDb();
+  const logger = createLogger();
+
+  expect(migrate(db, [m001], logger)).toEqual(['001_init']);
+  expect(fetchedAtIndex(db)).toBeUndefined();
+
+  expect(migrate(db, migrations, logger)).toEqual(['002_prices_fetched_index']);
+  expect(fetchedAtIndex(db)).toBe('idx_prices_fetched_at');
+  expect(
+    db
+      .prepare<[], { name: string }>('SELECT name FROM schema_migrations ORDER BY name')
+      .all()
+      .map((row) => row.name),
+  ).toEqual(['001_init', '002_prices_fetched_index']);
 });
 
 test('rejects a migration list that is not strictly ascending', () => {

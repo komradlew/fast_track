@@ -1,13 +1,14 @@
-import { AxiosError, CanceledError, type AxiosInstance } from 'axios';
+import { CanceledError, type AxiosInstance } from 'axios';
 
 import { ExternalApiError } from '../../errors/index.js';
 import type { CatalogCoin, CoinCatalog } from '../../modules/coins/coinCatalog.js';
 import type { PriceProvider, Quote } from '../../modules/prices/priceProvider.js';
 import type { Logger } from '../../utils/logger.js';
-import { isRetryable, toExternalApiError } from './cmc.errors.js';
+import { classify, type ClassifiedApiError } from './cmc.errors.js';
 import { parseMap, parseQuotes, parseStatus, type ParsedMapCoin } from './cmc.parse.js';
 
 const DEFAULT_RETRY_DELAYS_MS = [200, 400] as const;
+const DEFAULT_DEADLINE_MS = 8000;
 const SLOW_RESPONSE_MS = 2000;
 const MAX_QUOTE_IDS = 200;
 const MAP_PATH = '/v1/cryptocurrency/map';
@@ -18,17 +19,20 @@ export interface CmcClientDeps {
   http: AxiosInstance;
   logger: Logger;
   quoteCurrency: string;
-  sleep?: (ms: number) => Promise<void>;
+  sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
   retryDelaysMs?: readonly number[];
+  deadlineMs?: number;
 }
 
 export class CmcClient implements CoinCatalog, PriceProvider {
-  private readonly sleep: (ms: number) => Promise<void>;
+  private readonly sleep: (ms: number, signal: AbortSignal) => Promise<void>;
   private readonly retryDelaysMs: readonly number[];
+  private readonly deadlineMs: number;
 
   constructor(private readonly deps: CmcClientDeps) {
-    this.sleep = deps.sleep ?? defaultSleep;
+    this.sleep = deps.sleep ?? abortableSleep;
     this.retryDelaysMs = deps.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
+    this.deadlineMs = deps.deadlineMs ?? DEFAULT_DEADLINE_MS;
   }
 
   // CMC returns inactive rows even when listing_status is omitted, so filter them here.
@@ -82,20 +86,25 @@ export class CmcClient implements CoinCatalog, PriceProvider {
     params: Record<string, string>,
     signal?: AbortSignal,
   ): Promise<unknown> {
+    const deadlineSignal = AbortSignal.timeout(this.deadlineMs);
+    const combined = signal === undefined ? deadlineSignal : AbortSignal.any([deadlineSignal, signal]);
+    const deadlineAt = Date.now() + this.deadlineMs;
     const attempts = this.retryDelaysMs.length + 1;
     for (let attempt = 0; attempt < attempts; attempt += 1) {
-      if (signal?.aborted) {
-        this.deps.logger.debug('CMC request canceled', { endpoint: path, attempt });
-        throw new CanceledError();
-      }
+      this.throwIfStopped(path, attempt, signal, deadlineSignal, deadlineAt);
 
       const started = Date.now();
       try {
-        const response = await this.deps.http.get<unknown>(path, { params, signal });
+        const response = await this.deps.http.get<unknown>(path, { params, signal: combined });
         const durationMs = Date.now() - started;
         const success = successfulStatus(response.status, response.data);
         if (success === undefined) {
-          throw toExternalApiError(transportFailure(path, response.status, response.data), attempt);
+          const failure = classify(transportFailure(path, response.status, response.data), attempt);
+          if (failure === null) {
+            throw new CanceledError();
+          }
+          await this.retryOrThrow(path, attempt, durationMs, failure, signal, deadlineSignal, combined, deadlineAt);
+          continue;
         }
         this.deps.logger.debug('CMC request finished', {
           endpoint: path,
@@ -108,28 +117,115 @@ export class CmcClient implements CoinCatalog, PriceProvider {
         }
         return response.data;
       } catch (error) {
-        const durationMs = Date.now() - started;
-        if (isCanceled(error)) {
-          this.deps.logger.debug('CMC request canceled', { endpoint: path, attempt });
+        if (error instanceof ExternalApiError) {
           throw error;
         }
-        const mapped = error instanceof ExternalApiError ? error : toExternalApiError(error, attempt);
-        const delay = this.retryDelaysMs[attempt];
-        if (isRetryable(mapped) && delay !== undefined && signal?.aborted !== true) {
-          this.logFailure('warn', path, attempt, durationMs, mapped);
-          await this.sleep(delay);
-          continue;
+        const durationMs = Date.now() - started;
+        const stopped = this.stoppedError(path, attempt, signal, deadlineSignal);
+        if (stopped !== undefined) {
+          if (stopped instanceof ExternalApiError) {
+            this.logFailure('error', path, attempt, durationMs, stopped);
+          } else {
+            this.deps.logger.debug('CMC request canceled', { endpoint: path, attempt });
+          }
+          throw stopped;
         }
-        if (path === MAP_PATH && isUnknownSymbol(mapped)) {
-          this.deps.logger.debug('CMC symbol not found', { endpoint: path, attempt });
-          throw mapped;
+        const failure = classify(error, attempt);
+        if (failure === null) {
+          this.deps.logger.debug('CMC request canceled', { endpoint: path, attempt });
+          throw error instanceof CanceledError ? error : new CanceledError();
         }
-        this.logFailure('error', path, attempt, durationMs, mapped);
-        throw mapped;
+        await this.retryOrThrow(path, attempt, durationMs, failure, signal, deadlineSignal, combined, deadlineAt);
       }
     }
 
     throw new Error('CMC request ended without a result');
+  }
+
+  private async retryOrThrow(
+    path: string,
+    attempt: number,
+    durationMs: number,
+    failure: ClassifiedApiError,
+    signal: AbortSignal | undefined,
+    deadlineSignal: AbortSignal,
+    combined: AbortSignal,
+    deadlineAt: number,
+  ): Promise<void> {
+    const delay = this.retryDelaysMs[attempt];
+    const remaining = deadlineAt - Date.now();
+    if (failure.retryable && delay !== undefined && signal?.aborted !== true && !deadlineSignal.aborted) {
+      if (remaining <= delay) {
+        const timedOut = this.deadlineError(path, attempt);
+        this.logFailure('error', path, attempt, durationMs, timedOut);
+        throw timedOut;
+      }
+      this.logFailure('warn', path, attempt, durationMs, failure.error);
+      try {
+        await this.sleep(delay, combined);
+      } catch (error) {
+        const stopped = this.stoppedError(path, attempt, signal, deadlineSignal);
+        if (stopped instanceof ExternalApiError) {
+          this.logFailure('error', path, attempt, durationMs, stopped);
+          throw stopped;
+        }
+        if (stopped !== undefined) {
+          this.deps.logger.debug('CMC request canceled', { endpoint: path, attempt });
+          throw stopped;
+        }
+        throw error;
+      }
+      this.throwIfStopped(path, attempt, signal, deadlineSignal, deadlineAt);
+      return;
+    }
+    if (path === MAP_PATH && isUnknownSymbol(failure.error)) {
+      this.deps.logger.debug('CMC symbol not found', { endpoint: path, attempt });
+      throw failure.error;
+    }
+    this.logFailure('error', path, attempt, durationMs, failure.error);
+    throw failure.error;
+  }
+
+  private throwIfStopped(
+    path: string,
+    attempt: number,
+    signal: AbortSignal | undefined,
+    deadlineSignal: AbortSignal,
+    deadlineAt: number,
+  ): void {
+    const stopped = this.stoppedError(path, attempt, signal, deadlineSignal);
+    if (stopped instanceof CanceledError) {
+      this.deps.logger.debug('CMC request canceled', { endpoint: path, attempt });
+      throw stopped;
+    }
+    if (stopped instanceof ExternalApiError || Date.now() >= deadlineAt) {
+      const timedOut = stopped instanceof ExternalApiError ? stopped : this.deadlineError(path, attempt);
+      this.logFailure('error', path, attempt, 0, timedOut);
+      throw timedOut;
+    }
+  }
+
+  private stoppedError(
+    path: string,
+    attempt: number,
+    signal: AbortSignal | undefined,
+    deadlineSignal: AbortSignal,
+  ): ExternalApiError | InstanceType<typeof CanceledError> | undefined {
+    if (signal?.aborted === true) {
+      return new CanceledError();
+    }
+    if (deadlineSignal.aborted) {
+      return this.deadlineError(path, attempt);
+    }
+    return undefined;
+  }
+
+  private deadlineError(path: string, attempt: number): ExternalApiError {
+    return new ExternalApiError('CoinMarketCap request timed out', {
+      statusCode: 504,
+      code: 'EXTERNAL_API_TIMEOUT',
+      context: { endpoint: path, attempt },
+    });
   }
 
   private logFailure(
@@ -181,15 +277,6 @@ function transportFailure(path: string, httpStatus: number, data: unknown): unkn
   };
 }
 
-function isCanceled(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'code' in error &&
-    error.code === AxiosError.ERR_CANCELED
-  );
-}
-
 function isUnknownSymbol(error: ExternalApiError): boolean {
   const message = error.context?.cmcErrorMessage;
   return error.context?.httpStatus === 400 && typeof message === 'string' && UNKNOWN_SYMBOL.test(message);
@@ -221,8 +308,20 @@ function toCatalogCoin(coin: ParsedMapCoin): CatalogCoin {
   };
 }
 
-function defaultSleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
+function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(signal.reason ?? new CanceledError());
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      reject(signal.reason ?? new CanceledError());
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
   });
 }

@@ -8,6 +8,7 @@ const defaults = {
   cmcBaseUrl: 'https://pro-api.coinmarketcap.com',
   cmcApiKey: '',
   cmcTimeoutMs: 5000,
+  cmcDeadlineMs: 8000,
   quoteCurrency: 'USD',
   priceMaxAgeMs: 60000,
   maxTrackedCoins: 200,
@@ -43,6 +44,7 @@ test('reads valid overrides', () => {
     CMC_BASE_URL: 'https://sandbox-api.coinmarketcap.com',
     CMC_API_KEY: 'cmc-test-key',
     CMC_TIMEOUT_MS: '1000',
+    CMC_DEADLINE_MS: '9000',
     QUOTE_CURRENCY: 'USDT',
     PRICE_MAX_AGE_MS: '0',
     MAX_TRACKED_COINS: '50',
@@ -58,6 +60,7 @@ test('reads valid overrides', () => {
     cmcBaseUrl: 'https://sandbox-api.coinmarketcap.com',
     cmcApiKey: 'cmc-test-key',
     cmcTimeoutMs: 1000,
+    cmcDeadlineMs: 9000,
     quoteCurrency: 'USDT',
     priceMaxAgeMs: 0,
     maxTrackedCoins: 50,
@@ -65,6 +68,12 @@ test('reads valid overrides', () => {
     syncEnabled: false,
     shutdownTimeoutMs: 10000,
   });
+});
+
+test.each(['99', '120001', 'abc'])('rejects CMC_DEADLINE_MS=%s', (value) => {
+  expect(() => loadConfig({ NODE_ENV: 'test', CMC_DEADLINE_MS: value })).toThrow(
+    `Invalid env CMC_DEADLINE_MS: expected integer 100..120000, got ${JSON.stringify(value)}`,
+  );
 });
 
 test.each(['abc', '0', '70000'])('rejects PORT=%s', (value) => {

@@ -99,7 +99,7 @@ export function queryInt(
 }
 
 const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{3}))?Z)?$/;
-const ISO_DATE_MESSAGE = 'must be an ISO date';
+const ISO_DATE_MESSAGE = 'must be an ISO date in UTC (YYYY-MM-DD or YYYY-MM-DDTHH:mm:ss[.sss]Z)';
 
 export function queryIsoDate(query: Record<string, unknown>, name: string): FieldResult<string | undefined> {
   if (!Object.hasOwn(query, name)) {

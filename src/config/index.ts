@@ -18,6 +18,7 @@ export interface AppConfig {
   readonly cmcBaseUrl: string;
   readonly cmcApiKey: string;
   readonly cmcTimeoutMs: number;
+  readonly cmcDeadlineMs: number;
   readonly quoteCurrency: string;
   readonly priceMaxAgeMs: number;
   readonly maxTrackedCoins: number;
@@ -161,6 +162,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     cmcBaseUrl: readUrl(env, 'CMC_BASE_URL', 'https://pro-api.coinmarketcap.com'),
     cmcApiKey: readCmcApiKey(env, nodeEnv),
     cmcTimeoutMs: readInt(env, 'CMC_TIMEOUT_MS', 5000, 100, 60_000),
+    cmcDeadlineMs: readInt(env, 'CMC_DEADLINE_MS', 8000, 100, 120_000),
     quoteCurrency: readPattern(env, 'QUOTE_CURRENCY', QUOTE_CURRENCY_PATTERN, 'USD', '3-5 uppercase letters'),
     priceMaxAgeMs: readInt(env, 'PRICE_MAX_AGE_MS', 60_000, 0),
     maxTrackedCoins: readInt(env, 'MAX_TRACKED_COINS', 200, 1, 200),

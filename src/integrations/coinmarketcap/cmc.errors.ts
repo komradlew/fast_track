@@ -7,8 +7,7 @@ const RATE_LIMITED = 'CoinMarketCap rate limit exceeded';
 
 const TIMEOUT_CODES = new Set(['ECONNABORTED', 'ETIMEDOUT']);
 const NETWORK_CODES = new Set(['ECONNRESET', 'ENOTFOUND', 'ECONNREFUSED', 'EAI_AGAIN']);
-
-const retryableErrors = new WeakSet<ExternalApiError>();
+const SIZE_CODES = new Set(['ERR_BAD_RESPONSE', 'ERR_BAD_REQUEST']);
 
 interface CmcFailure {
   errorCode: number;
@@ -26,39 +25,33 @@ interface Decision {
   cmc?: CmcFailure;
 }
 
-export function toExternalApiError(error: unknown, attempt?: number): ExternalApiError {
+export interface ClassifiedApiError {
+  error: ExternalApiError;
+  retryable: boolean;
+}
+
+export function classify(error: unknown, attempt?: number): ClassifiedApiError | null {
   if (isCanceled(error)) {
-    throw error;
+    return null;
   }
   if (error instanceof ExternalApiError) {
-    return error;
+    return { error, retryable: false };
   }
 
-  const decision = classify(error);
+  const decision = decide(error);
   const context = decisionContext(decision, attempt);
-  const mapped = new ExternalApiError(decision.message, {
-    statusCode: decision.statusCode,
-    code: decision.code,
-    ...(decision.retryAfterSec !== undefined ? { retryAfterSec: decision.retryAfterSec } : {}),
-    ...(context !== undefined ? { context } : {}),
-  });
-  if (decision.retryable) {
-    retryableErrors.add(mapped);
-  }
-  return mapped;
+  return {
+    error: new ExternalApiError(decision.message, {
+      statusCode: decision.statusCode,
+      code: decision.code,
+      ...(decision.retryAfterSec !== undefined ? { retryAfterSec: decision.retryAfterSec } : {}),
+      ...(context !== undefined ? { context } : {}),
+    }),
+    retryable: decision.retryable,
+  };
 }
 
-export function isRetryable(error: unknown): boolean {
-  if (isCanceled(error)) {
-    return false;
-  }
-  if (error instanceof ExternalApiError) {
-    return retryableErrors.has(error) || error.code === 'EXTERNAL_API_TIMEOUT';
-  }
-  return classify(error).retryable;
-}
-
-function classify(error: unknown): Decision {
+function decide(error: unknown): Decision {
   const transportCode = readCode(error);
   const httpStatus = readHttpStatus(error);
   const endpoint = readEndpoint(error);
@@ -67,6 +60,10 @@ function classify(error: unknown): Decision {
 
   if (transportCode !== undefined && TIMEOUT_CODES.has(transportCode)) {
     return { ...base, message: TIMED_OUT, statusCode: 504, code: 'EXTERNAL_API_TIMEOUT', retryable: true };
+  }
+
+  if (transportCode !== undefined && SIZE_CODES.has(transportCode) && httpStatus === undefined) {
+    return { ...base, message: UNAVAILABLE, statusCode: 502, code: 'EXTERNAL_API_ERROR', retryable: false };
   }
 
   if (httpStatus !== undefined && httpStatus >= 500) {

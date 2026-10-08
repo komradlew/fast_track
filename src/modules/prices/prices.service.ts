@@ -54,8 +54,13 @@ export class PricesService {
     const now = this.deps.clock();
     const currency = this.deps.config.quoteCurrency;
     const latest = this.deps.prices.findLatest(coin.id, currency);
-    if (latest !== undefined && isFresh(latest.fetchedAt, now, this.deps.config.priceMaxAgeMs)) {
-      return toCurrentPrice(coin, latest, 'cache', false, now);
+    const lastFetchedAt = this.deps.prices.findLastFetchedAt(coin.id, currency);
+    if (
+      latest !== undefined &&
+      lastFetchedAt !== undefined &&
+      isFresh(lastFetchedAt, now, this.deps.config.priceMaxAgeMs)
+    ) {
+      return toCurrentPrice(coin, latest, 'cache', false, now, lastFetchedAt);
     }
 
     try {
@@ -71,21 +76,22 @@ export class PricesService {
 
       const fetchedAt = now.toISOString();
       this.deps.prices.insertMany([{ coinId: coin.id, quote, fetchedAt }]);
-      // Read the stored row. A repeated source time keeps the price already in the database.
-      const fresh = this.deps.prices.findLatest(coin.id, currency);
-      if (fresh === undefined) {
+      // The displayed quote is the newest source time. fetchedAt is this contact.
+      const stored = this.deps.prices.findLatest(coin.id, currency);
+      if (stored === undefined) {
         throw new Error('Stored price is missing after insert');
       }
-      return toCurrentPrice(coin, fresh, 'live', false, now);
+      const observedAt = this.deps.prices.findLastFetchedAt(coin.id, currency) ?? fetchedAt;
+      return toCurrentPrice(coin, stored, 'live', false, now, observedAt);
     } catch (error) {
       if (error instanceof ExternalApiError && latest !== undefined) {
         this.deps.logger.warn('Serving a stale coin price', {
           symbol: coin.symbol,
           cmcId: coin.cmcId,
-          fetchedAt: latest.fetchedAt,
+          fetchedAt: lastFetchedAt ?? latest.fetchedAt,
           code: error.code,
         });
-        return toCurrentPrice(coin, latest, 'cache', true, now);
+        return toCurrentPrice(coin, latest, 'cache', true, now, lastFetchedAt ?? latest.fetchedAt);
       }
       throw error;
     }
@@ -102,7 +108,7 @@ export class PricesService {
       coinId: coin.id,
       quoteCurrency,
       ...(query.from !== undefined ? { from: query.from } : {}),
-      ...(query.to !== undefined ? { to: query.to } : {}),
+      ...(query.to !== undefined ? { to: query.to, toInclusive: query.toInclusive !== false } : {}),
     };
     return {
       symbol: coin.symbol,
@@ -143,6 +149,7 @@ function toCurrentPrice(
   source: CurrentPrice['source'],
   stale: boolean,
   now: Date,
+  fetchedAt: string,
 ): CurrentPrice {
   return {
     symbol: coin.symbol,
@@ -155,9 +162,9 @@ function toCurrentPrice(
     percentChange24h: price.percentChange24h,
     percentChange7d: price.percentChange7d,
     sourceUpdatedAt: price.sourceUpdatedAt,
-    fetchedAt: price.fetchedAt,
+    fetchedAt,
     source,
     stale,
-    ageSec: ageSec(price.fetchedAt, now),
+    ageSec: ageSec(fetchedAt, now),
   };
 }

@@ -6,6 +6,7 @@ import axios, { type AxiosInstance } from 'axios';
 import type { AppConfig } from '../../config/index.js';
 
 const MAX_SOCKETS = 10;
+const MAX_BODY_BYTES = 5 * 1024 * 1024;
 
 export function createCmcHttp(
   config: Pick<AppConfig, 'cmcBaseUrl' | 'cmcApiKey' | 'cmcTimeoutMs'>,
@@ -19,6 +20,9 @@ export function createCmcHttp(
     },
     httpAgent: new http.Agent({ keepAlive: true, maxSockets: MAX_SOCKETS }),
     httpsAgent: new https.Agent({ keepAlive: true, maxSockets: MAX_SOCKETS }),
+    maxContentLength: MAX_BODY_BYTES,
+    maxBodyLength: MAX_BODY_BYTES,
+    maxRedirects: 0,
     validateStatus: () => true,
   });
 }

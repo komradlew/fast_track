@@ -235,6 +235,67 @@ test('deleting a coin removes its prices', () => {
   expect(prices.findLatest(eth.id, 'USD')).toEqual(stored(t1, fetchedLate));
 });
 
+test('findHistory keeps a date-only day open at the next midnight', () => {
+  const { coins, prices } = openRepos();
+  const coin = createCoin(coins, bitcoin());
+  const morning = '2026-10-08T09:00:00.000Z';
+  const nextMidnight = '2026-10-09T00:00:00.000Z';
+  prices.insertMany([
+    row(coin.id, morning, fetchedLate, { price: 1 }),
+    row(coin.id, t1, fetchedLate, { price: 2 }),
+    row(coin.id, nextMidnight, fetchedLate, { price: 3 }),
+  ]);
+
+  const page = { coinId: coin.id, quoteCurrency: 'USD' as const, order: 'asc' as const, limit: 10, offset: 0 };
+  const day = {
+    coinId: coin.id,
+    quoteCurrency: 'USD' as const,
+    from: '2026-10-08T00:00:00.000Z',
+    to: nextMidnight,
+    toInclusive: false as const,
+  };
+
+  expect(prices.findHistory({ ...page, ...day }).map((item) => item.sourceUpdatedAt)).toEqual([morning, t1]);
+  expect(prices.countHistory(day)).toBe(2);
+  expect(prices.findHistory({ ...page, to: '2026-10-08T09:30:00.000Z' }).map((item) => item.price)).toEqual([1]);
+});
+
+test('findLastFetchedAt follows the latest fetch, not the newest source row', () => {
+  const { coins, prices } = openRepos();
+  const btc = createCoin(coins, bitcoin());
+  const eth = createCoin(coins, ethereum());
+
+  expect(prices.findLastFetchedAt(btc.id, 'USD')).toBeUndefined();
+
+  prices.insertMany([
+    row(btc.id, t2, fetchedEarly),
+    row(btc.id, t1, fetchedLate),
+    row(btc.id, t1, fetchedLate, { quoteCurrency: 'EUR' }),
+    row(eth.id, t3, fetchedLate),
+  ]);
+
+  expect(prices.findLastFetchedAt(btc.id, 'USD')).toBe(fetchedLate);
+  expect(prices.findLatest(btc.id, 'USD')).toEqual(stored(t2, fetchedEarly));
+  expect(prices.findLastFetchedAt(btc.id, 'EUR')).toBe(fetchedLate);
+  expect(prices.findLastFetchedAt(btc.id, 'GBP')).toBeUndefined();
+  expect(prices.findLastFetchedAt(eth.id, 'USD')).toBe(fetchedLate);
+});
+
+test('findLastFetchedAt is served by the fetched_at index', () => {
+  const { db, coins } = openRepos();
+  const coin = createCoin(coins, bitcoin());
+  const explained = db
+    .prepare<[{ coinId: number; quoteCurrency: string }], { detail: string }>(
+      'EXPLAIN QUERY PLAN SELECT MAX(fetched_at) AS fetched_at FROM prices ' +
+        'WHERE coin_id = @coinId AND quote_currency = @quoteCurrency',
+    )
+    .all({ coinId: coin.id, quoteCurrency: 'USD' });
+
+  expect(explained.map((step) => step.detail)).toEqual([
+    'SEARCH prices USING COVERING INDEX idx_prices_fetched_at (coin_id=? AND quote_currency=?)',
+  ]);
+});
+
 test('findLatest is served by the unique price index', () => {
   const { db, coins } = openRepos();
   const coin = createCoin(coins, bitcoin());

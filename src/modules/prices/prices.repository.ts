@@ -23,6 +23,7 @@ export interface PriceHistoryFilter {
   quoteCurrency: string;
   from?: string;
   to?: string;
+  toInclusive?: boolean;
 }
 
 export interface PriceHistoryQuery extends PriceHistoryFilter {
@@ -57,6 +58,11 @@ interface TouchParams extends LatestParams {
 interface RangeParams extends LatestParams {
   from: string | null;
   to: string | null;
+  toInclusive: 0 | 1;
+}
+
+interface FetchedAtRow {
+  fetched_at: string | null;
 }
 
 interface HistoryParams extends RangeParams {
@@ -106,7 +112,14 @@ const SELECT_LATEST =
 const HISTORY_WHERE =
   'WHERE coin_id = @coinId AND quote_currency = @quoteCurrency ' +
   'AND (@from IS NULL OR source_updated_at >= @from) ' +
-  'AND (@to IS NULL OR source_updated_at <= @to)';
+  'AND (@to IS NULL OR (' +
+  '(@toInclusive = 1 AND source_updated_at <= @to) OR ' +
+  '(@toInclusive = 0 AND source_updated_at < @to)' +
+  '))';
+
+const SELECT_LAST_FETCHED_AT =
+  'SELECT MAX(fetched_at) AS fetched_at FROM prices ' +
+  'WHERE coin_id = @coinId AND quote_currency = @quoteCurrency';
 
 const SELECT_HISTORY_ASC =
   'SELECT ' +
@@ -127,6 +140,7 @@ const COUNT_HISTORY = 'SELECT COUNT(*) AS total FROM prices ' + HISTORY_WHERE;
 export class PricesRepository {
   private readonly insertAll: (rows: readonly PriceInsert[]) => PriceWriteCounts;
   private readonly selectLatest: Database.Statement<[LatestParams], PriceRow>;
+  private readonly selectLastFetchedAt: Database.Statement<[LatestParams], FetchedAtRow>;
   private readonly selectHistoryAsc: Database.Statement<[HistoryParams], PriceRow>;
   private readonly selectHistoryDesc: Database.Statement<[HistoryParams], PriceRow>;
   private readonly countHistoryRows: Database.Statement<[RangeParams], CountRow>;
@@ -153,6 +167,7 @@ export class PricesRepository {
       return { inserted, updated };
     });
     this.selectLatest = db.prepare(SELECT_LATEST);
+    this.selectLastFetchedAt = db.prepare(SELECT_LAST_FETCHED_AT);
     this.selectHistoryAsc = db.prepare(SELECT_HISTORY_ASC);
     this.selectHistoryDesc = db.prepare(SELECT_HISTORY_DESC);
     this.countHistoryRows = db.prepare(COUNT_HISTORY);
@@ -166,6 +181,15 @@ export class PricesRepository {
   findLatest(coinId: number, quoteCurrency: string): StoredPrice | undefined {
     const row = this.selectLatest.get({ coinId, quoteCurrency });
     return row === undefined ? undefined : toStoredPrice(row);
+  }
+
+  // Freshness follows the last contact with the source, not the newest quote.
+  findLastFetchedAt(coinId: number, quoteCurrency: string): string | undefined {
+    const row = this.selectLastFetchedAt.get({ coinId, quoteCurrency });
+    if (row === undefined || row.fetched_at === null) {
+      return undefined;
+    }
+    return row.fetched_at;
   }
 
   findHistory(query: PriceHistoryQuery): StoredPrice[] {
@@ -199,6 +223,7 @@ function rangeParams(filter: PriceHistoryFilter): RangeParams {
     quoteCurrency: filter.quoteCurrency,
     from: filter.from ?? null,
     to: filter.to ?? null,
+    toInclusive: filter.toInclusive === false ? 0 : 1,
   };
 }
 

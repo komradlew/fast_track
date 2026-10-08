@@ -3,7 +3,13 @@ import http from 'node:http';
 import https from 'node:https';
 import path from 'node:path';
 
-import { AxiosError, type AxiosAdapter, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
+import {
+  AxiosError,
+  CanceledError,
+  type AxiosAdapter,
+  type AxiosResponse,
+  type InternalAxiosRequestConfig,
+} from 'axios';
 
 import { createCmcHttp, closeCmcHttp } from '../../src/integrations/coinmarketcap/cmc.http.js';
 import { CmcClient } from '../../src/integrations/coinmarketcap/cmc.client.js';
@@ -194,6 +200,9 @@ describe('CmcClient request', () => {
       expect(httpsAgent.maxSockets).toBe(10);
       expect(httpAgent.maxSockets).toBe(10);
     }
+    expect(httpClient.defaults.maxRedirects).toBe(0);
+    expect(httpClient.defaults.maxContentLength).toBe(5 * 1024 * 1024);
+    expect(httpClient.defaults.maxBodyLength).toBe(5 * 1024 * 1024);
     expect(calls[0]?.headers.get('X-CMC_PRO_API_KEY')).toBe(SECRET);
     expect(calls[0]?.headers.get('Accept')).toBe('application/json');
     expect(calls[0]?.params).toEqual({ id: '1,1027' });
@@ -330,6 +339,124 @@ describe('CmcClient request', () => {
     expect(sleepCalls).toEqual([]);
     expect(lines.filter((line) => line.level === 'error' || line.level === 'warn')).toEqual([]);
     expect(JSON.stringify(lines)).not.toContain(SECRET);
+  });
+
+  test('a hanging call hits the deadline instead of every timeout', async () => {
+    const httpClient = createCmcHttp({
+      cmcBaseUrl: 'https://pro-api.coinmarketcap.com',
+      cmcApiKey: SECRET,
+      cmcTimeoutMs: 5000,
+    });
+    openClients.push(httpClient);
+    let calls = 0;
+    httpClient.defaults.adapter = (config) =>
+      new Promise((_resolve, reject) => {
+        calls += 1;
+        const signal = config.signal;
+        const onAbort = (): void => {
+          reject(new CanceledError(undefined, config));
+        };
+        if (signal === undefined || signal.addEventListener === undefined) {
+          return;
+        }
+        if (signal.aborted) {
+          onAbort();
+          return;
+        }
+        signal.addEventListener('abort', onAbort, { once: true });
+      });
+    const captured = captureLogger();
+    const client = new TestCmcClient({
+      http: httpClient,
+      logger: captured.logger,
+      quoteCurrency: 'USD',
+      deadlineMs: 80,
+      retryDelaysMs: [200, 400],
+    });
+    const started = Date.now();
+
+    await expect(client.send()).rejects.toMatchObject({
+      statusCode: 504,
+      code: 'EXTERNAL_API_TIMEOUT',
+      message: 'CoinMarketCap request timed out',
+    });
+
+    expect(calls).toBe(1);
+    expect(Date.now() - started).toBeLessThan(500);
+  });
+
+  test('the deadline aborts a retry pause', async () => {
+    const script = scripted([{ status: 500, data: statusBody(500) }]);
+    const httpClient = createCmcHttp({
+      cmcBaseUrl: 'https://pro-api.coinmarketcap.com',
+      cmcApiKey: SECRET,
+      cmcTimeoutMs: 1000,
+    });
+    openClients.push(httpClient);
+    httpClient.defaults.adapter = script.adapter;
+    const captured = captureLogger();
+    let slept = false;
+    const client = new TestCmcClient({
+      http: httpClient,
+      logger: captured.logger,
+      quoteCurrency: 'USD',
+      deadlineMs: 80,
+      retryDelaysMs: [10],
+      sleep: (_ms, signal) => {
+        slept = true;
+        return new Promise((resolve, reject) => {
+          const timer = setTimeout(resolve, 1000);
+          const onAbort = (): void => {
+            clearTimeout(timer);
+            reject(signal.reason ?? new CanceledError());
+          };
+          if (signal.aborted) {
+            onAbort();
+            return;
+          }
+          signal.addEventListener('abort', onAbort, { once: true });
+        });
+      },
+    });
+    const started = Date.now();
+
+    await expect(client.send()).rejects.toMatchObject({
+      statusCode: 504,
+      code: 'EXTERNAL_API_TIMEOUT',
+    });
+
+    expect(slept).toBe(true);
+    expect(script.calls).toHaveLength(1);
+    expect(Date.now() - started).toBeLessThan(500);
+  });
+
+  test('a caller abort during the pause is not a deadline timeout', async () => {
+    const script = scripted([{ status: 500, data: statusBody(500) }]);
+    const httpClient = createCmcHttp({
+      cmcBaseUrl: 'https://pro-api.coinmarketcap.com',
+      cmcApiKey: SECRET,
+      cmcTimeoutMs: 1000,
+    });
+    openClients.push(httpClient);
+    httpClient.defaults.adapter = script.adapter;
+    const captured = captureLogger();
+    const controller = new AbortController();
+    const client = new TestCmcClient({
+      http: httpClient,
+      logger: captured.logger,
+      quoteCurrency: 'USD',
+      deadlineMs: 5000,
+      retryDelaysMs: [50],
+      sleep: (_ms, signal) => {
+        controller.abort();
+        return new Promise((_resolve, reject) => {
+          reject(signal.reason ?? new CanceledError());
+        });
+      },
+    });
+
+    await expect(client.send(QUOTES, {}, controller.signal)).rejects.toMatchObject({ code: 'ERR_CANCELED' });
+    expect(script.calls).toHaveLength(1);
   });
 
   test('times out against a server that never responds', async () => {

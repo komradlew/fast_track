@@ -1,7 +1,10 @@
 import request from 'supertest';
+import { CanceledError } from 'axios';
 
 import type { Db } from '../../src/db/connection.js';
 import { ExternalApiError, type ExternalApiCode } from '../../src/errors/index.js';
+import { CmcClient } from '../../src/integrations/coinmarketcap/cmc.client.js';
+import { closeCmcHttp, createCmcHttp } from '../../src/integrations/coinmarketcap/cmc.http.js';
 import type { Quote } from '../../src/modules/prices/priceProvider.js';
 import { PricesRepository } from '../../src/modules/prices/prices.repository.js';
 import type { Logger } from '../../src/utils/logger.js';
@@ -295,6 +298,98 @@ describe('GET /api/coins/:symbol/price', () => {
     expectError(missing, 502, 'EXTERNAL_API_ERROR', 'CoinMarketCap returned no quote');
   });
 
+  test('stays fresh when CoinMarketCap returns an older source time', async () => {
+    const ctx = handle.current();
+    const coinId = await trackBtc(ctx);
+    const storedFetchedAt = '2026-10-08T10:00:05.000Z';
+    const liveAt = '2026-10-08T12:00:00.000Z';
+    seed(ctx.db, coinId, storedFetchedAt, {
+      sourceUpdatedAt: '2026-10-08T10:00:00.000Z',
+      price: 100,
+    });
+    ctx.setNow(liveAt);
+    replaceQuotes({
+      1: quoteFor(1, { price: 90, sourceUpdatedAt: '2026-10-08T09:00:00.000Z' }),
+    });
+
+    const first = await request(ctx.app).get('/api/coins/BTC/price').set(auth(ctx.readKey));
+    const second = await request(ctx.app).get('/api/coins/BTC/price').set(auth(ctx.readKey));
+
+    expect(first.status).toBe(200);
+    expect(first.body).toMatchObject({
+      price: 100,
+      sourceUpdatedAt: '2026-10-08T10:00:00.000Z',
+      fetchedAt: liveAt,
+      source: 'live',
+      stale: false,
+      ageSec: 0,
+    });
+    expect(second.body).toMatchObject({
+      price: 100,
+      fetchedAt: liveAt,
+      source: 'cache',
+      stale: false,
+      ageSec: 0,
+    });
+    expect(provider.getQuotes).toHaveBeenCalledTimes(1);
+    expect(countPrices(ctx.db)).toBe(2);
+  });
+
+  test('returns a stale price when CoinMarketCap hangs past the deadline', async () => {
+    const httpClient = createCmcHttp({
+      cmcBaseUrl: 'https://pro-api.coinmarketcap.com',
+      cmcApiKey: 'test-key',
+      cmcTimeoutMs: 5000,
+    });
+    httpClient.defaults.adapter = (config) =>
+      new Promise((_resolve, reject) => {
+        const signal = config.signal;
+        const onAbort = (): void => {
+          reject(new CanceledError(undefined, config));
+        };
+        if (signal === undefined || signal.addEventListener === undefined) {
+          return;
+        }
+        if (signal.aborted) {
+          onAbort();
+          return;
+        }
+        signal.addEventListener('abort', onAbort, { once: true });
+      });
+    const providerClient = new CmcClient({
+      http: httpClient,
+      logger,
+      quoteCurrency: 'USD',
+      deadlineMs: 80,
+      retryDelaysMs: [200, 400],
+    });
+    const ctx = await createTestContext({
+      provider: providerClient,
+      logger,
+      config: { priceMaxAgeMs: maxAgeMs, quoteCurrency: 'USD' },
+    });
+    try {
+      const coinId = await trackBtc(ctx);
+      seed(ctx.db, coinId, testNow);
+      ctx.setNow(staleAt);
+      const started = Date.now();
+
+      const response = await request(ctx.app).get('/api/coins/BTC/price').set(auth(ctx.readKey));
+
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({
+        price: 64250.12,
+        fetchedAt: testNow,
+        source: 'cache',
+        stale: true,
+      });
+      expect(Date.now() - started).toBeLessThan(1000);
+    } finally {
+      closeCmcHttp(httpClient);
+      ctx.close();
+    }
+  });
+
   test('does not hide an unexpected provider error behind a stale price', async () => {
     const ctx = handle.current();
     const coinId = await trackBtc(ctx);
@@ -366,7 +461,12 @@ describe('GET /api/coins/:symbol/history', () => {
       { price: 1, sourceUpdatedAt: t1 },
       { price: 2, sourceUpdatedAt: t2 },
     ]);
-    expect(midnight.body).toMatchObject({ items: [], total: 0 });
+    expect(midnight.body).toMatchObject({ total: 3 });
+    expect(pricesOf(midnight.body)).toEqual([
+      { price: 3, sourceUpdatedAt: t3 },
+      { price: 2, sourceUpdatedAt: t2 },
+      { price: 1, sourceUpdatedAt: t1 },
+    ]);
     expect(page.body).toMatchObject({ total: 3, limit: 1, offset: 1 });
     expect(pricesOf(page.body)).toEqual([{ price: 2, sourceUpdatedAt: t2 }]);
     expect(pricesOf(defaults.body)).toEqual([
@@ -374,6 +474,36 @@ describe('GET /api/coins/:symbol/history', () => {
       { price: 2, sourceUpdatedAt: t2 },
       { price: 1, sourceUpdatedAt: t1 },
     ]);
+    expect(provider.getQuotes).not.toHaveBeenCalled();
+  });
+
+  test('a date-only upper bound covers that UTC day and stops at the next midnight', async () => {
+    const ctx = handle.current();
+    const btcId = await trackBtc(ctx);
+    const morning = '2026-10-08T09:00:00.000Z';
+    const later = '2026-10-08T10:00:00.000Z';
+    const nextMidnight = '2026-10-09T00:00:00.000Z';
+    seed(ctx.db, btcId, morning, { sourceUpdatedAt: morning, price: 1 });
+    seed(ctx.db, btcId, later, { sourceUpdatedAt: later, price: 2 });
+    seed(ctx.db, btcId, nextMidnight, { sourceUpdatedAt: nextMidnight, price: 3 });
+
+    const wholeDay = await request(ctx.app)
+      .get('/api/coins/BTC/history')
+      .set(auth(ctx.readKey))
+      .query({ from: '2026-10-08', to: '2026-10-08', order: 'asc' });
+    const untilHalfPast = await request(ctx.app)
+      .get('/api/coins/BTC/history')
+      .set(auth(ctx.readKey))
+      .query({ to: '2026-10-08T09:30:00Z', order: 'asc' });
+
+    expect(wholeDay.status).toBe(200);
+    expect(wholeDay.body).toMatchObject({ total: 2 });
+    expect(pricesOf(wholeDay.body)).toEqual([
+      { price: 1, sourceUpdatedAt: morning },
+      { price: 2, sourceUpdatedAt: later },
+    ]);
+    expect(untilHalfPast.body).toMatchObject({ total: 1 });
+    expect(pricesOf(untilHalfPast.body)).toEqual([{ price: 1, sourceUpdatedAt: morning }]);
     expect(provider.getQuotes).not.toHaveBeenCalled();
   });
 
@@ -397,8 +527,8 @@ describe('GET /api/coins/:symbol/history', () => {
 
   test.each([
     [{ from: '2026-10-09', to: '2026-10-08' }, [{ field: 'from', message: 'must be before or equal to to' }]],
-    [{ from: '2026-02-31' }, [{ field: 'from', message: 'must be an ISO date' }]],
-    [{ from: 'abc' }, [{ field: 'from', message: 'must be an ISO date' }]],
+    [{ from: '2026-02-31' }, [{ field: 'from', message: 'must be an ISO date in UTC (YYYY-MM-DD or YYYY-MM-DDTHH:mm:ss[.sss]Z)' }]],
+    [{ from: 'abc' }, [{ field: 'from', message: 'must be an ISO date in UTC (YYYY-MM-DD or YYYY-MM-DDTHH:mm:ss[.sss]Z)' }]],
     [{ limit: '5000' }, [{ field: 'limit', message: 'must be an integer 1..1000' }]],
     [{ order: 'up' }, [{ field: 'order', message: 'must be asc or desc' }]],
   ])('rejects %j', async (query, details) => {

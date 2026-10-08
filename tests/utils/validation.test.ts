@@ -286,7 +286,7 @@ test.each([
 ])('queryIsoDate rejects %s', (value) => {
   expect(queryIsoDate({ from: value }, 'from')).toEqual({
     ok: false,
-    error: { field: 'from', message: 'must be an ISO date' },
+    error: { field: 'from', message: 'must be an ISO date in UTC (YYYY-MM-DD or YYYY-MM-DDTHH:mm:ss[.sss]Z)' },
   });
 });
 
@@ -308,6 +308,7 @@ test('parseHistoryQuery applies defaults and normalizes the range', () => {
   expect(parseHistoryQuery({ from: '2026-10-08', to: '2026-10-08T11:00:00Z', order: 'asc' })).toEqual({
     from: '2026-10-08T00:00:00.000Z',
     to: '2026-10-08T11:00:00.000Z',
+    toInclusive: true,
     limit: 100,
     offset: 0,
     order: 'asc',
@@ -315,6 +316,15 @@ test('parseHistoryQuery applies defaults and normalizes the range', () => {
   expect(parseHistoryQuery({ from: '2026-10-08T10:00:00.000Z', to: '2026-10-08T10:00:00Z' })).toEqual({
     from: '2026-10-08T10:00:00.000Z',
     to: '2026-10-08T10:00:00.000Z',
+    toInclusive: true,
+    limit: 100,
+    offset: 0,
+    order: 'desc',
+  });
+  expect(parseHistoryQuery({ from: '2026-10-08', to: '2026-10-08' })).toEqual({
+    from: '2026-10-08T00:00:00.000Z',
+    to: '2026-10-09T00:00:00.000Z',
+    toInclusive: false,
     limit: 100,
     offset: 0,
     order: 'desc',
@@ -329,10 +339,10 @@ test('parseHistoryQuery rejects an inverted range', () => {
 
 test('parseHistoryQuery collects invalid dates, bounds, and unknown parameters', () => {
   expectInvalid(() => parseHistoryQuery({ from: '2026-02-31' }), [
-    { field: 'from', message: 'must be an ISO date' },
+    { field: 'from', message: 'must be an ISO date in UTC (YYYY-MM-DD or YYYY-MM-DDTHH:mm:ss[.sss]Z)' },
   ]);
   expectInvalid(() => parseHistoryQuery({ from: 'abc', limit: '5000', order: 'up', sort: 'time' }), [
-    { field: 'from', message: 'must be an ISO date' },
+    { field: 'from', message: 'must be an ISO date in UTC (YYYY-MM-DD or YYYY-MM-DDTHH:mm:ss[.sss]Z)' },
     { field: 'limit', message: 'must be an integer 1..1000' },
     { field: 'order', message: 'must be asc or desc' },
     { field: 'sort', message: 'unknown field' },
