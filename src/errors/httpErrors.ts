@@ -30,9 +30,15 @@ export class ConflictError extends AppError {
   }
 }
 
-export type ExternalApiCode = 'EXTERNAL_API_ERROR' | 'EXTERNAL_API_TIMEOUT' | 'EXTERNAL_API_UNAVAILABLE';
+export type ExternalApiCode =
+  | 'EXTERNAL_API_ERROR'
+  | 'EXTERNAL_API_TIMEOUT'
+  | 'EXTERNAL_API_UNAVAILABLE'
+  | 'EXTERNAL_API_RATE_LIMITED';
 
 export class ExternalApiError extends AppError {
+  public readonly retryAfterSec?: number;
+
   constructor(
     message: string,
     options: {
@@ -40,6 +46,7 @@ export class ExternalApiError extends AppError {
       code?: ExternalApiCode;
       details?: unknown;
       context?: Record<string, unknown>;
+      retryAfterSec?: number;
     } = {},
   ) {
     super(
@@ -49,5 +56,8 @@ export class ExternalApiError extends AppError {
       options.details,
       options.context,
     );
+    if (options.retryAfterSec !== undefined) {
+      this.retryAfterSec = options.retryAfterSec;
+    }
   }
 }
