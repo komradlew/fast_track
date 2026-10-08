@@ -21,7 +21,7 @@ export interface AppDeps {
   version: string;
   db: Db;
   coins: CoinsService;
-  prices?: PricesService;
+  prices: PricesService;
   apiKeys: ApiKeysRepository;
   clock: () => Date;
 }
@@ -38,9 +38,7 @@ export function createApp(deps: AppDeps): express.Express {
   const apiRouter = Router();
   apiRouter.use(authenticate(deps.apiKeys, deps.clock));
   apiRouter.use('/coins', createCoinsRouter(deps.coins));
-  if (deps.prices !== undefined) {
-    apiRouter.use('/coins', createPricesRouter(deps.prices));
-  }
+  apiRouter.use('/coins', createPricesRouter(deps.prices));
   app.use('/api', apiRouter);
 
   app.use(notFound);

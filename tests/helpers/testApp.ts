@@ -11,8 +11,11 @@ import { migrations } from '../../src/db/migrations/index.js';
 import { ApiKeysRepository } from '../../src/modules/auth/apiKeys.repository.js';
 import { CoinsRepository } from '../../src/modules/coins/coins.repository.js';
 import { CoinsService } from '../../src/modules/coins/coins.service.js';
-import { unavailableCatalog } from '../../src/modules/coins/unavailableCatalog.js';
+import type { PriceProvider } from '../../src/modules/prices/priceProvider.js';
+import { PricesRepository } from '../../src/modules/prices/prices.repository.js';
+import { PricesService } from '../../src/modules/prices/prices.service.js';
 import { createLogger } from '../../src/utils/logger.js';
+import { createFakeCoinCatalog } from './fakeCoinCatalog.js';
 
 function readPackageVersion(): string {
   const file = path.resolve(__dirname, '../../package.json');
@@ -35,25 +38,41 @@ function sharedProbeDb(): Db {
   return probeDb;
 }
 
+const idlePriceProvider: PriceProvider = {
+  getQuotes() {
+    return Promise.reject(new Error('Price provider is not configured in this test'));
+  },
+};
+
 export function buildTestApp(overrides: Partial<AppDeps> = {}): Express {
   const db = overrides.db ?? sharedProbeDb();
   const config = overrides.config ?? loadConfig({ NODE_ENV: 'test', LOG_LEVEL: 'silent' });
   const clock = overrides.clock ?? ((): Date => new Date());
+  const logger = overrides.logger ?? createLogger('silent');
   return createApp({
     config,
-    logger: overrides.logger ?? createLogger('silent'),
+    logger,
     version: overrides.version ?? readPackageVersion(),
     db,
     coins:
       overrides.coins ??
       new CoinsService({
         coins: new CoinsRepository(db),
-        catalog: unavailableCatalog,
+        catalog: createFakeCoinCatalog(),
         config,
         clock,
       }),
+    prices:
+      overrides.prices ??
+      new PricesService({
+        coins: new CoinsRepository(db),
+        prices: new PricesRepository(db),
+        provider: idlePriceProvider,
+        config,
+        clock,
+        logger,
+      }),
     apiKeys: overrides.apiKeys ?? new ApiKeysRepository(db),
-    prices: overrides.prices,
     clock,
   });
 }
