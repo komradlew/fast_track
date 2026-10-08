@@ -5,6 +5,7 @@ import type { CoinsRepository } from '../coins/coins.repository.js';
 import type { Coin } from '../coins/coins.types.js';
 import type { PriceProvider } from './priceProvider.js';
 import type { PricesRepository, StoredPrice } from './prices.repository.js';
+import type { HistoryQuery } from './prices.validation.js';
 
 export interface PricesServiceDeps {
   coins: CoinsRepository;
@@ -13,6 +14,15 @@ export interface PricesServiceDeps {
   config: Pick<AppConfig, 'quoteCurrency' | 'priceMaxAgeMs'>;
   clock: () => Date;
   logger: Logger;
+}
+
+export interface PriceHistory {
+  symbol: string;
+  quoteCurrency: string;
+  items: StoredPrice[];
+  total: number;
+  limit: number;
+  offset: number;
 }
 
 export interface CurrentPrice {
@@ -79,6 +89,34 @@ export class PricesService {
       }
       throw error;
     }
+  }
+
+  getHistory(symbol: string, query: HistoryQuery): PriceHistory {
+    const coin = this.deps.coins.findBySymbol(symbol);
+    if (coin === undefined) {
+      throw new NotFoundError('Coin ' + symbol + ' not found');
+    }
+
+    const quoteCurrency = this.deps.config.quoteCurrency;
+    const filter = {
+      coinId: coin.id,
+      quoteCurrency,
+      ...(query.from !== undefined ? { from: query.from } : {}),
+      ...(query.to !== undefined ? { to: query.to } : {}),
+    };
+    return {
+      symbol: coin.symbol,
+      quoteCurrency,
+      items: this.deps.prices.findHistory({
+        ...filter,
+        order: query.order,
+        limit: query.limit,
+        offset: query.offset,
+      }),
+      total: this.deps.prices.countHistory(filter),
+      limit: query.limit,
+      offset: query.offset,
+    };
   }
 }
 

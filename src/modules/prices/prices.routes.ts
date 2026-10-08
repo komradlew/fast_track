@@ -8,5 +8,6 @@ export function createPricesRouter(service: PricesService): Router {
   const router = Router();
   const controller = createPricesController(service);
   router.get('/:symbol/price', requireRole('read', 'admin'), controller.getCurrent);
+  router.get('/:symbol/history', requireRole('read', 'admin'), controller.getHistory);
   return router;
 }

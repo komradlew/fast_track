@@ -5,10 +5,13 @@ import {
   parseListCoinsQuery,
   parseUpdateCoinBody,
 } from '../../src/modules/coins/coins.validation.js';
+import { parseHistoryQuery } from '../../src/modules/prices/prices.validation.js';
 import {
   booleanField,
   queryBool,
+  queryEnum,
   queryInt,
+  queryIsoDate,
   rejectUnknown,
   requireObject,
   stringField,
@@ -249,6 +252,90 @@ test('parseListCoinsQuery rejects a negative offset and an unknown parameter', (
 test('parseListCoinsQuery rejects a repeated limit', () => {
   expectInvalid(() => parseListCoinsQuery({ limit: ['1', '2'] }), [
     { field: 'limit', message: 'must be an integer 1..100' },
+  ]);
+});
+
+test('queryIsoDate is absent until the key is present', () => {
+  expect(queryIsoDate({}, 'from')).toEqual({ ok: true, value: undefined });
+});
+
+test('queryIsoDate normalizes a date and a timestamp to UTC', () => {
+  expect(queryIsoDate({ from: '2026-10-08' }, 'from')).toEqual({
+    ok: true,
+    value: '2026-10-08T00:00:00.000Z',
+  });
+  expect(queryIsoDate({ from: '2026-10-08T10:00:00Z' }, 'from')).toEqual({
+    ok: true,
+    value: '2026-10-08T10:00:00.000Z',
+  });
+  expect(queryIsoDate({ from: '2024-02-29T23:59:59.123Z' }, 'from')).toEqual({
+    ok: true,
+    value: '2024-02-29T23:59:59.123Z',
+  });
+});
+
+test.each([
+  '2026-02-31',
+  '2026-02-29',
+  'abc',
+  '2026-10-08T24:00:00Z',
+  '2026-10-08T10:00:00+00:00',
+  '2026-10-08T10:00:00.12Z',
+  '',
+  1,
+])('queryIsoDate rejects %s', (value) => {
+  expect(queryIsoDate({ from: value }, 'from')).toEqual({
+    ok: false,
+    error: { field: 'from', message: 'must be an ISO date' },
+  });
+});
+
+test('queryEnum uses the default and accepts only the listed values', () => {
+  expect(queryEnum({}, 'order', ['asc', 'desc'], 'desc')).toEqual({ ok: true, value: 'desc' });
+  expect(queryEnum({ order: 'asc' }, 'order', ['asc', 'desc'], 'desc')).toEqual({ ok: true, value: 'asc' });
+  expect(queryEnum({ order: 'up' }, 'order', ['asc', 'desc'], 'desc')).toEqual({
+    ok: false,
+    error: { field: 'order', message: 'must be asc or desc' },
+  });
+  expect(queryEnum({ order: ['asc'] }, 'order', ['asc', 'desc'], 'desc')).toEqual({
+    ok: false,
+    error: { field: 'order', message: 'must be asc or desc' },
+  });
+});
+
+test('parseHistoryQuery applies defaults and normalizes the range', () => {
+  expect(parseHistoryQuery({})).toEqual({ limit: 100, offset: 0, order: 'desc' });
+  expect(parseHistoryQuery({ from: '2026-10-08', to: '2026-10-08T11:00:00Z', order: 'asc' })).toEqual({
+    from: '2026-10-08T00:00:00.000Z',
+    to: '2026-10-08T11:00:00.000Z',
+    limit: 100,
+    offset: 0,
+    order: 'asc',
+  });
+  expect(parseHistoryQuery({ from: '2026-10-08T10:00:00.000Z', to: '2026-10-08T10:00:00Z' })).toEqual({
+    from: '2026-10-08T10:00:00.000Z',
+    to: '2026-10-08T10:00:00.000Z',
+    limit: 100,
+    offset: 0,
+    order: 'desc',
+  });
+});
+
+test('parseHistoryQuery rejects an inverted range', () => {
+  expectInvalid(() => parseHistoryQuery({ from: '2026-10-09', to: '2026-10-08' }), [
+    { field: 'from', message: 'must be before or equal to to' },
+  ]);
+});
+
+test('parseHistoryQuery collects invalid dates, bounds, and unknown parameters', () => {
+  expectInvalid(() => parseHistoryQuery({ from: '2026-02-31' }), [
+    { field: 'from', message: 'must be an ISO date' },
+  ]);
+  expectInvalid(() => parseHistoryQuery({ from: 'abc', limit: '5000', order: 'up', sort: 'time' }), [
+    { field: 'from', message: 'must be an ISO date' },
+    { field: 'limit', message: 'must be an integer 1..1000' },
+    { field: 'order', message: 'must be asc or desc' },
+    { field: 'sort', message: 'unknown field' },
   ]);
 });
 

@@ -320,3 +320,115 @@ describe('GET /api/coins/:symbol/price', () => {
     expect(provider.getQuotes).not.toHaveBeenCalled();
   });
 });
+
+describe('GET /api/coins/:symbol/history', () => {
+  const handle = usePrices();
+  const t1 = '2026-10-08T10:00:00.000Z';
+  const t2 = '2026-10-08T11:00:00.000Z';
+  const t3 = '2026-10-08T12:00:00.000Z';
+
+  test('filters, orders, and pages stored prices', async () => {
+    const ctx = handle.current();
+    const btcId = await trackBtc(ctx);
+    const created = await request(ctx.app).post('/api/coins').set(auth(ctx.adminKey)).send({ symbol: 'ETH' });
+    expect(created.status).toBe(201);
+    const ethId = ctx.db.prepare<[string], { id: number }>('SELECT id FROM coins WHERE symbol = ?').get('ETH')?.id;
+    if (ethId === undefined) {
+      throw new Error('missing ETH');
+    }
+    seed(ctx.db, btcId, t1, { sourceUpdatedAt: t1, price: 1 });
+    seed(ctx.db, btcId, t2, { sourceUpdatedAt: t2, price: 2 });
+    seed(ctx.db, btcId, t3, { sourceUpdatedAt: t3, price: 3 });
+    seed(ctx.db, ethId, t2, { sourceUpdatedAt: t2, price: 9 });
+
+    const ranged = await request(ctx.app)
+      .get('/api/coins/btc/history')
+      .set(auth(ctx.readKey))
+      .query({ from: '2026-10-08T11:00:00Z', to: t3, order: 'asc' });
+    const byDay = await request(ctx.app)
+      .get('/api/coins/BTC/history')
+      .set(auth(ctx.readKey))
+      .query({ from: '2026-10-08', to: t2, order: 'asc' });
+    const midnight = await request(ctx.app).get('/api/coins/BTC/history').set(auth(ctx.readKey)).query({ to: '2026-10-08' });
+    const page = await request(ctx.app)
+      .get('/api/coins/BTC/history')
+      .set(auth(ctx.readKey))
+      .query({ order: 'asc', limit: '1', offset: '1' });
+    const defaults = await request(ctx.app).get('/api/coins/BTC/history').set(auth(ctx.readKey));
+
+    expect(ranged.status).toBe(200);
+    expect(ranged.body).toMatchObject({ symbol: 'BTC', quoteCurrency: 'USD', total: 2, limit: 100, offset: 0 });
+    expect(pricesOf(ranged.body)).toEqual([
+      { price: 2, sourceUpdatedAt: t2 },
+      { price: 3, sourceUpdatedAt: t3 },
+    ]);
+    expect(pricesOf(byDay.body)).toEqual([
+      { price: 1, sourceUpdatedAt: t1 },
+      { price: 2, sourceUpdatedAt: t2 },
+    ]);
+    expect(midnight.body).toMatchObject({ items: [], total: 0 });
+    expect(page.body).toMatchObject({ total: 3, limit: 1, offset: 1 });
+    expect(pricesOf(page.body)).toEqual([{ price: 2, sourceUpdatedAt: t2 }]);
+    expect(pricesOf(defaults.body)).toEqual([
+      { price: 3, sourceUpdatedAt: t3 },
+      { price: 2, sourceUpdatedAt: t2 },
+      { price: 1, sourceUpdatedAt: t1 },
+    ]);
+    expect(provider.getQuotes).not.toHaveBeenCalled();
+  });
+
+  test('returns an empty page when the coin has no prices', async () => {
+    const ctx = handle.current();
+    await trackBtc(ctx);
+
+    const response = await request(ctx.app).get('/api/coins/btc/history').set(auth(ctx.readKey));
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      symbol: 'BTC',
+      quoteCurrency: 'USD',
+      items: [],
+      total: 0,
+      limit: 100,
+      offset: 0,
+    });
+    expect(provider.getQuotes).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    [{ from: '2026-10-09', to: '2026-10-08' }, [{ field: 'from', message: 'must be before or equal to to' }]],
+    [{ from: '2026-02-31' }, [{ field: 'from', message: 'must be an ISO date' }]],
+    [{ from: 'abc' }, [{ field: 'from', message: 'must be an ISO date' }]],
+    [{ limit: '5000' }, [{ field: 'limit', message: 'must be an integer 1..1000' }]],
+    [{ order: 'up' }, [{ field: 'order', message: 'must be asc or desc' }]],
+  ])('rejects %j', async (query, details) => {
+    const ctx = handle.current();
+
+    const response = await request(ctx.app).get('/api/coins/BTC/history').set(auth(ctx.readKey)).query(query);
+
+    expectError(response, 400, 'VALIDATION_ERROR', 'Invalid request');
+    expect(response.body.error.details).toEqual(details);
+    expect(provider.getQuotes).not.toHaveBeenCalled();
+  });
+
+  test('returns 404 for an unknown coin and 401 without a key', async () => {
+    const ctx = handle.current();
+
+    const missing = await request(ctx.app).get('/api/coins/BTC/history').set(auth(ctx.readKey));
+    const anonymous = await request(ctx.app).get('/api/coins/BTC/history');
+
+    expectError(missing, 404, 'NOT_FOUND', 'Coin BTC not found');
+    expectError(anonymous, 401, 'UNAUTHORIZED', 'Invalid or missing API key');
+    expect(provider.getQuotes).not.toHaveBeenCalled();
+  });
+});
+
+function pricesOf(body: { items?: unknown }): Array<{ price: number; sourceUpdatedAt: string }> {
+  if (!Array.isArray(body.items)) {
+    throw new Error('history response has no items');
+  }
+  return body.items.map((item: { price: number; sourceUpdatedAt: string }) => ({
+    price: item.price,
+    sourceUpdatedAt: item.sourceUpdatedAt,
+  }));
+}

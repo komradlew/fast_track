@@ -98,6 +98,47 @@ export function queryInt(
   return { ok: true, value };
 }
 
+const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{3}))?Z)?$/;
+const ISO_DATE_MESSAGE = 'must be an ISO date';
+
+export function queryIsoDate(query: Record<string, unknown>, name: string): FieldResult<string | undefined> {
+  if (!Object.hasOwn(query, name)) {
+    return { ok: true, value: undefined };
+  }
+
+  const raw = query[name];
+  if (typeof raw !== 'string') {
+    return { ok: false, error: { field: name, message: ISO_DATE_MESSAGE } };
+  }
+
+  const normalized = normalizeIsoDate(raw);
+  if (normalized === undefined) {
+    return { ok: false, error: { field: name, message: ISO_DATE_MESSAGE } };
+  }
+  return { ok: true, value: normalized };
+}
+
+export function queryEnum<T extends string>(
+  query: Record<string, unknown>,
+  name: string,
+  allowed: readonly T[],
+  defaultValue: T,
+): FieldResult<T> {
+  if (!Object.hasOwn(query, name)) {
+    return { ok: true, value: defaultValue };
+  }
+
+  const raw = query[name];
+  if (typeof raw === 'string') {
+    for (const option of allowed) {
+      if (option === raw) {
+        return { ok: true, value: option };
+      }
+    }
+  }
+  return { ok: false, error: { field: name, message: enumMessage(allowed) } };
+}
+
 export function queryBool(query: Record<string, unknown>, name: string): FieldResult<boolean> {
   if (!Object.hasOwn(query, name)) {
     return { ok: false, error: { field: name, message: 'required' } };
@@ -111,6 +152,46 @@ export function queryBool(query: Record<string, unknown>, name: string): FieldRe
     return { ok: true, value: false };
   }
   return { ok: false, error: { field: name, message: 'must be true or false' } };
+}
+
+function normalizeIsoDate(raw: string): string | undefined {
+  const match = ISO_DATE.exec(raw);
+  if (match === null) {
+    return undefined;
+  }
+
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) {
+    return undefined;
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = match[4] === undefined ? 0 : Number(match[4]);
+  const minute = match[5] === undefined ? 0 : Number(match[5]);
+  const second = match[6] === undefined ? 0 : Number(match[6]);
+  const millis = match[7] === undefined ? 0 : Number(match[7]);
+  if (
+    parsed.getUTCFullYear() !== year ||
+    parsed.getUTCMonth() + 1 !== month ||
+    parsed.getUTCDate() !== day ||
+    parsed.getUTCHours() !== hour ||
+    parsed.getUTCMinutes() !== minute ||
+    parsed.getUTCSeconds() !== second ||
+    parsed.getUTCMilliseconds() !== millis
+  ) {
+    return undefined;
+  }
+  return parsed.toISOString();
+}
+
+function enumMessage(allowed: readonly string[]): string {
+  if (allowed.length < 2) {
+    return 'must be ' + (allowed[0] ?? '');
+  }
+  const last = allowed[allowed.length - 1] ?? '';
+  return 'must be ' + allowed.slice(0, -1).join(', ') + ' or ' + last;
 }
 
 function integerMessage(min: number, max: number | undefined): string {
