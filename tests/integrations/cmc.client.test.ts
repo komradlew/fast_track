@@ -1,5 +1,7 @@
+import { readFileSync } from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
+import path from 'node:path';
 
 import { AxiosError, type AxiosAdapter, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
 
@@ -8,6 +10,7 @@ import { CmcClient } from '../../src/integrations/coinmarketcap/cmc.client.js';
 import type { Logger } from '../../src/utils/logger.js';
 
 const SECRET = 'secret-test-key';
+const MAP = '/v1/cryptocurrency/map';
 const QUOTES = '/v3/cryptocurrency/quotes/latest';
 
 const openClients: Array<ReturnType<typeof createCmcHttp>> = [];
@@ -104,6 +107,50 @@ function scripted(steps: readonly ScriptStep[]): { adapter: AxiosAdapter; calls:
     return Promise.resolve(response);
   };
   return { adapter, calls };
+}
+
+function loadFixture(name: string): unknown {
+  const file = path.resolve(__dirname, '../fixtures/cmc', name);
+  return JSON.parse(readFileSync(file, 'utf8')) as unknown;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function dropQuote(body: unknown, cmcId: number): unknown {
+  if (!isRecord(body) || !Array.isArray(body.data)) {
+    throw new Error('fixture has no data array');
+  }
+  return {
+    ...body,
+    data: body.data.filter((item) => !(isRecord(item) && item.id === cmcId)),
+  };
+}
+
+function mapEnvelope(items: readonly Record<string, unknown>[]): unknown {
+  return {
+    status: { error_code: 0, error_message: null, credit_count: 1 },
+    data: items,
+  };
+}
+
+function mapCoin(coin: {
+  id: number;
+  name: string;
+  slug: string;
+  rank: number | null;
+  is_active: 0 | 1;
+  symbol?: string;
+}): Record<string, unknown> {
+  return {
+    id: coin.id,
+    name: coin.name,
+    symbol: coin.symbol ?? 'BTC',
+    slug: coin.slug,
+    rank: coin.rank,
+    is_active: coin.is_active,
+  };
 }
 
 function build(adapter: AxiosAdapter, retryDelaysMs?: readonly number[]) {
@@ -331,4 +378,180 @@ describe('CmcClient request', () => {
       });
     }
   }, 4000);
+});
+
+describe('CmcClient findBySymbol', () => {
+  test('picks the active coin with the lowest rank', async () => {
+    const script = scripted([{ status: 200, data: loadFixture('map-btc.json') }]);
+    const { client } = build(script.adapter);
+
+    await expect(client.findBySymbol(' btc ')).resolves.toEqual({
+      cmcId: 1,
+      symbol: 'BTC',
+      name: 'Bitcoin',
+      slug: 'bitcoin',
+    });
+    expect(script.calls).toHaveLength(1);
+    expect(script.calls[0]?.url).toBe(MAP);
+    expect(script.calls[0]?.params).toEqual({ symbol: 'BTC' });
+  });
+
+  test('prefers the highest market cap when several symbols match', async () => {
+    const script = scripted([{ status: 200, data: loadFixture('map-multiple.json') }]);
+    const { client } = build(script.adapter);
+
+    await expect(client.findBySymbol('UNI')).resolves.toEqual({
+      cmcId: 7083,
+      symbol: 'UNI',
+      name: 'Uniswap',
+      slug: 'uniswap',
+    });
+  });
+
+  test('returns null for an unknown symbol without an error log', async () => {
+    const script = scripted([{ status: 400, data: loadFixture('map-empty.json') }]);
+    const { client, lines } = build(script.adapter);
+
+    await expect(client.findBySymbol('ZZZZZZZZZ')).resolves.toBeNull();
+    expect(script.calls).toHaveLength(1);
+    expect(lines.filter((line) => line.level === 'error' || line.level === 'warn')).toEqual([]);
+    expect(lines).toEqual([
+      expect.objectContaining({
+        level: 'debug',
+        msg: 'CMC symbol not found',
+        context: expect.objectContaining({ endpoint: MAP, attempt: 0 }),
+      }),
+    ]);
+  });
+
+  test('returns null when every match is inactive', async () => {
+    const script = scripted([
+      {
+        status: 200,
+        data: mapEnvelope([mapCoin({ id: 31652, name: 'batcat', slug: 'batcat', rank: null, is_active: 0 })]),
+      },
+    ]);
+    const { client, lines } = build(script.adapter);
+
+    await expect(client.findBySymbol('BTC')).resolves.toBeNull();
+    expect(lines.filter((line) => line.level === 'error')).toEqual([]);
+  });
+
+  test('puts a null rank after any numeric rank and keeps the first tie', async () => {
+    const unranked = mapCoin({ id: 9, name: 'Unranked', slug: 'unranked', rank: null, is_active: 1 });
+    const first = mapCoin({ id: 2, name: 'First', slug: 'first', rank: 40, is_active: 1 });
+    const second = mapCoin({ id: 3, name: 'Second', slug: 'second', rank: 40, is_active: 1 });
+    const script = scripted([{ status: 200, data: mapEnvelope([unranked, second, first]) }]);
+    const { client } = build(script.adapter);
+
+    await expect(client.findBySymbol('BTC')).resolves.toEqual({
+      cmcId: 3,
+      symbol: 'BTC',
+      name: 'Second',
+      slug: 'second',
+    });
+  });
+
+  test('returns the first active coin when every rank is null', async () => {
+    const script = scripted([
+      {
+        status: 200,
+        data: mapEnvelope([
+          mapCoin({ id: 4, name: 'Later', slug: 'later', rank: null, is_active: 1 }),
+          mapCoin({ id: 5, name: 'Earlier', slug: 'earlier', rank: null, is_active: 1 }),
+        ]),
+      },
+    ]);
+    const { client } = build(script.adapter);
+
+    await expect(client.findBySymbol('BTC')).resolves.toMatchObject({ cmcId: 4, slug: 'later' });
+  });
+
+  test('rejects a 400 that is not an unknown symbol', async () => {
+    const script = scripted([{ status: 400, data: statusBody(400, 'Invalid value for "convert": "XXX"') }]);
+    const { client, lines } = build(script.adapter);
+
+    await expect(client.findBySymbol('BTC')).rejects.toMatchObject({
+      statusCode: 502,
+      code: 'EXTERNAL_API_ERROR',
+    });
+    expect(lines.some((line) => line.level === 'error' && line.msg === 'CMC request failed')).toBe(true);
+    expect(lines.some((line) => line.msg === 'CMC symbol not found')).toBe(false);
+  });
+
+  test('does not turn a canceled lookup into null', async () => {
+    const script = scripted([{ status: 200, data: loadFixture('map-btc.json') }]);
+    const { client } = build(script.adapter);
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(client.findBySymbol('BTC', controller.signal)).rejects.toMatchObject({ code: 'ERR_CANCELED' });
+    expect(script.calls).toHaveLength(0);
+  });
+});
+
+describe('CmcClient getQuotes', () => {
+  test('does not call CMC for an empty id list', async () => {
+    const script = scripted([{ status: 200, data: okBody() }]);
+    const { client } = build(script.adapter);
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(client.getQuotes([], controller.signal)).resolves.toEqual([]);
+    expect(script.calls).toHaveLength(0);
+  });
+
+  test('requests the latest quotes for the given ids', async () => {
+    const script = scripted([{ status: 200, data: loadFixture('quotes-btc-eth.json') }]);
+    const { client } = build(script.adapter);
+
+    const quotes = await client.getQuotes([1, 1027]);
+
+    expect(quotes).toHaveLength(2);
+    expect(quotes.map((quote) => quote.cmcId)).toEqual([1, 1027]);
+    expect(quotes[0]).toMatchObject({
+      symbol: 'BTC',
+      quoteCurrency: 'USD',
+      sourceUpdatedAt: '2026-10-08T07:10:05.000Z',
+    });
+    expect(script.calls[0]?.url).toBe(QUOTES);
+    expect(script.calls[0]?.params).toEqual({ id: '1,1027', convert: 'USD', skip_invalid: 'true' });
+  });
+
+  test('returns only the quotes CMC sent and logs the missing ids', async () => {
+    const script = scripted([{ status: 200, data: dropQuote(loadFixture('quotes-btc-eth.json'), 1027) }]);
+    const { client, lines } = build(script.adapter);
+
+    const quotes = await client.getQuotes([1, 1027, 1]);
+
+    expect(quotes.map((quote) => quote.cmcId)).toEqual([1]);
+    expect(lines).toContainEqual(
+      expect.objectContaining({
+        level: 'debug',
+        msg: 'CMC quotes missing ids',
+        context: { missingIds: [1027] },
+      }),
+    );
+  });
+
+  test('refuses more than 200 ids before calling CMC', async () => {
+    const script = scripted([{ status: 200, data: okBody() }]);
+    const { client } = build(script.adapter);
+    const ids = Array.from({ length: 201 }, (_, index) => index + 1);
+
+    await expect(client.getQuotes(ids)).rejects.toThrow(/200/);
+    expect(script.calls).toHaveLength(0);
+  });
+
+  test('still fails a symbol-shaped 400 on the quotes endpoint', async () => {
+    const script = scripted([{ status: 400, data: statusBody(400, 'Invalid value for "symbol": "BTC"') }]);
+    const { client, lines } = build(script.adapter);
+
+    await expect(client.getQuotes([1])).rejects.toMatchObject({
+      statusCode: 502,
+      code: 'EXTERNAL_API_ERROR',
+    });
+    expect(lines.some((line) => line.level === 'error')).toBe(true);
+    expect(lines.some((line) => line.msg === 'CMC symbol not found')).toBe(false);
+  });
 });
