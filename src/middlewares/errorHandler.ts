@@ -1,6 +1,6 @@
 import type { ErrorRequestHandler } from 'express';
 
-import { AppError } from '../errors/index.js';
+import { AppError, ExternalApiError } from '../errors/index.js';
 import type { Logger } from '../utils/logger.js';
 
 interface ClientError {
@@ -42,6 +42,9 @@ export function errorHandler(logger: Logger): ErrorRequestHandler {
     }
     if (body.statusCode === 401) {
       res.setHeader('WWW-Authenticate', 'Bearer');
+    }
+    if (err instanceof ExternalApiError && err.retryAfterSec !== undefined) {
+      res.setHeader('Retry-After', String(err.retryAfterSec));
     }
 
     res.status(body.statusCode).json({ error });
