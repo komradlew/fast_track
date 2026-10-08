@@ -53,6 +53,7 @@ export function buildTestApp(overrides: Partial<AppDeps> = {}): Express {
         clock,
       }),
     apiKeys: overrides.apiKeys ?? new ApiKeysRepository(db),
+    prices: overrides.prices,
     clock,
   });
 }
