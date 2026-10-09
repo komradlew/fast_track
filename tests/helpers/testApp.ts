@@ -8,6 +8,9 @@ import { loadConfig } from '../../src/config/index.js';
 import { openDb, type Db } from '../../src/db/connection.js';
 import { migrate } from '../../src/db/migrate.js';
 import { migrations } from '../../src/db/migrations/index.js';
+import { TaskScheduler } from '../../src/jobs/taskScheduler.js';
+import { JobRunsRepository } from '../../src/modules/jobs/jobRuns.repository.js';
+import { JobsService } from '../../src/modules/jobs/jobs.service.js';
 import { ApiKeysRepository } from '../../src/modules/auth/apiKeys.repository.js';
 import { CoinsRepository } from '../../src/modules/coins/coins.repository.js';
 import { CoinsService } from '../../src/modules/coins/coins.service.js';
@@ -44,6 +47,15 @@ const idlePriceProvider: PriceProvider = {
   },
 };
 
+function idleJobs(db: Db, logger: ReturnType<typeof createLogger>, clock: () => Date): JobsService {
+  const jobRuns = new JobRunsRepository(db);
+  return new JobsService({
+    scheduler: new TaskScheduler({ jobRuns, logger, clock }),
+    jobRuns,
+    enabled: false,
+  });
+}
+
 export function buildTestApp(overrides: Partial<AppDeps> = {}): Express {
   const db = overrides.db ?? sharedProbeDb();
   const config = overrides.config ?? loadConfig({ NODE_ENV: 'test', LOG_LEVEL: 'silent' });
@@ -73,6 +85,7 @@ export function buildTestApp(overrides: Partial<AppDeps> = {}): Express {
         logger,
       }),
     apiKeys: overrides.apiKeys ?? new ApiKeysRepository(db),
+    jobs: overrides.jobs ?? idleJobs(db, logger, clock),
     clock,
   });
 }

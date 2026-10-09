@@ -124,38 +124,29 @@ test('insertMany inserts new quotes and refreshes fetched_at for the same source
   const first = row(coin.id, t1, fetchedEarly);
   const second = row(coin.id, t2, fetchedLate);
 
-  expect(prices.insertMany([first, second])).toEqual({ inserted: 2, updated: 0 });
-  expect(prices.insertMany([first, second])).toEqual({ inserted: 0, updated: 2 });
+  expect(prices.insertMany([first, second])).toEqual({ inserted: 2, updated: 0, skipped: 0 });
+  expect(prices.insertMany([first, second])).toEqual({ inserted: 0, updated: 2, skipped: 0 });
   expect(prices.findLatest(coin.id, 'USD')).toEqual(stored(t2, fetchedLate));
 
-  expect(prices.insertMany([row(coin.id, t2, fetchedEarly, { price: 10 })])).toEqual({ inserted: 0, updated: 1 });
+  expect(prices.insertMany([row(coin.id, t2, fetchedEarly, { price: 10 })])).toEqual({ inserted: 0, updated: 1, skipped: 0 });
   expect(prices.findLatest(coin.id, 'USD')).toEqual(stored(t2, fetchedEarly));
 
-  expect(prices.insertMany([row(coin.id, t3, fetchedEarly)])).toEqual({ inserted: 1, updated: 0 });
+  expect(prices.insertMany([row(coin.id, t3, fetchedEarly)])).toEqual({ inserted: 1, updated: 0, skipped: 0 });
   expect(countPrices(db)).toBe(3);
-  expect(prices.insertMany([])).toEqual({ inserted: 0, updated: 0 });
+  expect(prices.insertMany([])).toEqual({ inserted: 0, updated: 0, skipped: 0 });
 });
 
-test('insertMany rolls back the batch when a coin is missing', () => {
+test('insertMany skips a missing coin and keeps the rest of the batch', () => {
   const { db, coins, prices } = openRepos();
   const btc = createCoin(coins, bitcoin());
   const eth = createCoin(coins, ethereum());
 
-  let caught: unknown;
-  try {
-    prices.insertMany([
-      row(btc.id, t1, fetchedLate),
-      row(999_999, t2, fetchedLate),
-      row(eth.id, t3, fetchedLate),
-    ]);
-  } catch (err) {
-    caught = err;
-  }
-
-  expect(caught).toMatchObject({ code: 'SQLITE_CONSTRAINT_FOREIGNKEY' });
-  expect(countPrices(db)).toBe(0);
-  expect(prices.findLatest(btc.id, 'USD')).toBeUndefined();
-  expect(prices.findLatest(eth.id, 'USD')).toBeUndefined();
+  expect(
+    prices.insertMany([row(btc.id, t1, fetchedLate), row(999_999, t2, fetchedLate), row(eth.id, t3, fetchedLate)]),
+  ).toEqual({ inserted: 2, updated: 0, skipped: 1 });
+  expect(countPrices(db)).toBe(2);
+  expect(prices.findLatest(btc.id, 'USD')).toBeDefined();
+  expect(prices.findLatest(eth.id, 'USD')).toBeDefined();
 });
 
 test('findLatest returns the newest source time and ignores another currency', () => {

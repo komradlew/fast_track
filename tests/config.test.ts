@@ -1,4 +1,4 @@
-import { loadConfig, loadDbConfig } from '../src/config/index.js';
+import { configWarnings, loadConfig, loadDbConfig } from '../src/config/index.js';
 
 const defaults = {
   nodeEnv: 'development',
@@ -10,10 +10,12 @@ const defaults = {
   cmcTimeoutMs: 5000,
   cmcDeadlineMs: 8000,
   quoteCurrency: 'USD',
-  priceMaxAgeMs: 60000,
+  priceMaxAgeMs: 360000,
   maxTrackedCoins: 200,
   syncIntervalMs: 300000,
   syncEnabled: true,
+  syncInitialDelayMs: 5000,
+  syncMaxBackoffMs: 3600000,
   shutdownTimeoutMs: 10000,
 };
 
@@ -66,6 +68,8 @@ test('reads valid overrides', () => {
     maxTrackedCoins: 50,
     syncIntervalMs: 60000,
     syncEnabled: false,
+    syncInitialDelayMs: 5000,
+    syncMaxBackoffMs: 3600000,
     shutdownTimeoutMs: 10000,
   });
 });
@@ -154,4 +158,39 @@ test('rejects SYNC_ENABLED=yes', () => {
   expect(() => loadConfig({ NODE_ENV: 'test', SYNC_ENABLED: 'yes' })).toThrow(
     'Invalid env SYNC_ENABLED: expected "true" or "false", got "yes"',
   );
+});
+
+describe('sync scheduling env', () => {
+  test('reads SYNC_INITIAL_DELAY_MS and SYNC_MAX_BACKOFF_MS', () => {
+    const config = loadConfig({ NODE_ENV: 'test', SYNC_INITIAL_DELAY_MS: '0', SYNC_MAX_BACKOFF_MS: '7200000' });
+    expect(config.syncInitialDelayMs).toBe(0);
+    expect(config.syncMaxBackoffMs).toBe(7_200_000);
+  });
+
+  test.each([
+    ['SYNC_INITIAL_DELAY_MS', '600001'],
+    ['SYNC_INITIAL_DELAY_MS', '-1'],
+    ['SYNC_INITIAL_DELAY_MS', '5s'],
+    ['SYNC_MAX_BACKOFF_MS', '59999'],
+    ['SYNC_MAX_BACKOFF_MS', 'abc'],
+  ])('rejects %s=%s', (name, value) => {
+    expect(() => loadConfig({ NODE_ENV: 'test', [name]: value })).toThrow(`Invalid env ${name}`);
+  });
+
+  test('max back-off must not be lower than the sync interval', () => {
+    expect(() =>
+      loadConfig({ NODE_ENV: 'test', SYNC_INTERVAL_MS: '600000', SYNC_MAX_BACKOFF_MS: '300000' }),
+    ).toThrow('Invalid env SYNC_MAX_BACKOFF_MS: expected integer >= SYNC_INTERVAL_MS (600000)');
+  });
+
+  test('default max back-off follows a long sync interval', () => {
+    const config = loadConfig({ NODE_ENV: 'test', SYNC_INTERVAL_MS: '7200000' });
+    expect(config.syncMaxBackoffMs).toBe(7_200_000);
+  });
+
+  test('warns when cached prices expire before the next sync run', () => {
+    expect(configWarnings({ syncEnabled: true, priceMaxAgeMs: 60_000, syncIntervalMs: 300_000 })).toHaveLength(1);
+    expect(configWarnings({ syncEnabled: true, priceMaxAgeMs: 360_000, syncIntervalMs: 300_000 })).toEqual([]);
+    expect(configWarnings({ syncEnabled: false, priceMaxAgeMs: 60_000, syncIntervalMs: 300_000 })).toEqual([]);
+  });
 });

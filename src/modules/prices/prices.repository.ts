@@ -12,6 +12,7 @@ export interface PriceInsert {
 export interface PriceWriteCounts {
   inserted: number;
   updated: number;
+  skipped: number;
 }
 
 export type StoredPrice = Omit<Quote, 'cmcId' | 'symbol'> & {
@@ -94,10 +95,10 @@ const INSERT_PRICE =
   'INSERT OR IGNORE INTO prices (' +
   'coin_id, quote_currency, price, market_cap, volume_24h, ' +
   'percent_change_1h, percent_change_24h, percent_change_7d, source_updated_at, fetched_at' +
-  ') VALUES (' +
+  ') SELECT ' +
   '@coinId, @quoteCurrency, @price, @marketCap, @volume24h, ' +
-  '@percentChange1h, @percentChange24h, @percentChange7d, @sourceUpdatedAt, @fetchedAt' +
-  ')';
+  '@percentChange1h, @percentChange24h, @percentChange7d, @sourceUpdatedAt, @fetchedAt ' +
+  'WHERE EXISTS (SELECT 1 FROM coins WHERE id = @coinId)';
 
 const TOUCH_FETCHED_AT =
   'UPDATE prices SET fetched_at = @fetchedAt ' +
@@ -151,20 +152,26 @@ export class PricesRepository {
     this.insertAll = db.transaction((rows: readonly PriceInsert[]) => {
       let inserted = 0;
       let updated = 0;
+      let skipped = 0;
       for (const row of rows) {
         const params = toInsertParams(row);
         if (insertPrice.run(params).changes > 0) {
           inserted += 1;
           continue;
         }
-        updated += touchFetchedAt.run({
+        const touched = touchFetchedAt.run({
           coinId: params.coinId,
           quoteCurrency: params.quoteCurrency,
           sourceUpdatedAt: params.sourceUpdatedAt,
           fetchedAt: params.fetchedAt,
         }).changes;
+        if (touched > 0) {
+          updated += 1;
+        } else {
+          skipped += 1;
+        }
       }
-      return { inserted, updated };
+      return { inserted, updated, skipped };
     });
     this.selectLatest = db.prepare(SELECT_LATEST);
     this.selectLastFetchedAt = db.prepare(SELECT_LAST_FETCHED_AT);
@@ -173,7 +180,7 @@ export class PricesRepository {
     this.countHistoryRows = db.prepare(COUNT_HISTORY);
   }
 
-  // A missing coin fails the whole batch. A duplicate source time only refreshes fetched_at.
+  // A missing coin is skipped. A duplicate source time only refreshes fetched_at.
   insertMany(rows: readonly PriceInsert[]): PriceWriteCounts {
     return this.insertAll(rows);
   }
@@ -183,7 +190,6 @@ export class PricesRepository {
     return row === undefined ? undefined : toStoredPrice(row);
   }
 
-  // Freshness follows the last contact with the source, not the newest quote.
   findLastFetchedAt(coinId: number, quoteCurrency: string): string | undefined {
     const row = this.selectLastFetchedAt.get({ coinId, quoteCurrency });
     if (row === undefined || row.fetched_at === null) {

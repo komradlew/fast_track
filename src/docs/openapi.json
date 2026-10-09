@@ -1,0 +1,1268 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "fast_track — crypto price tracker",
+    "version": "0.0.0",
+    "description": "Tracks cryptocurrency prices from CoinMarketCap, stores the history in SQLite and syncs prices in the background.\n\nAll `/api` endpoints need an API key: `Authorization: Bearer ft_...`. Keys are created with `npm run apikey:create`. Roles: `read` (read endpoints) and `admin` (everything)."
+  },
+  "servers": [
+    {
+      "url": "/"
+    }
+  ],
+  "security": [
+    {
+      "ApiKeyAuth": []
+    }
+  ],
+  "tags": [
+    {
+      "name": "status"
+    },
+    {
+      "name": "coins"
+    },
+    {
+      "name": "prices"
+    },
+    {
+      "name": "jobs"
+    }
+  ],
+  "paths": {
+    "/status": {
+      "get": {
+        "tags": [
+          "status"
+        ],
+        "operationId": "getStatus",
+        "summary": "Liveness and database check",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Service is healthy",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database check failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/coins": {
+      "get": {
+        "tags": [
+          "coins"
+        ],
+        "operationId": "listCoins",
+        "summary": "List tracked coins (read, admin)",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/Offset"
+          },
+          {
+            "name": "isActive",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Page of coins",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoinList"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "coins"
+        ],
+        "operationId": "createCoin",
+        "summary": "Start tracking a coin found on CoinMarketCap (admin)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCoinRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Coin added",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestId"
+              },
+              "Location": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "/api/coins/BTC"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Coin"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          },
+          "503": {
+            "$ref": "#/components/responses/UpstreamUnavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
+          }
+        }
+      }
+    },
+    "/api/coins/{symbol}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Symbol"
+        }
+      ],
+      "get": {
+        "tags": [
+          "coins"
+        ],
+        "operationId": "getCoin",
+        "summary": "Get a tracked coin (read, admin)",
+        "responses": {
+          "200": {
+            "description": "Coin",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Coin"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "coins"
+        ],
+        "operationId": "updateCoin",
+        "summary": "Pause or resume syncing of a coin (admin)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCoinRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated coin",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Coin"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "coins"
+        ],
+        "operationId": "deleteCoin",
+        "summary": "Stop tracking a coin and delete its price history (admin)",
+        "responses": {
+          "204": {
+            "description": "Deleted",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/coins/{symbol}/price": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Symbol"
+        }
+      ],
+      "get": {
+        "tags": [
+          "prices"
+        ],
+        "operationId": "getCurrentPrice",
+        "summary": "Current price (read, admin)",
+        "description": "Returns the stored price if it is fresher than `PRICE_MAX_AGE_MS`, otherwise asks CoinMarketCap. If CoinMarketCap fails and a stored price exists, returns it with `stale: true`.",
+        "responses": {
+          "200": {
+            "description": "Current price",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CurrentPrice"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          },
+          "503": {
+            "$ref": "#/components/responses/UpstreamUnavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
+          }
+        }
+      }
+    },
+    "/api/coins/{symbol}/history": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/Symbol"
+        }
+      ],
+      "get": {
+        "tags": [
+          "prices"
+        ],
+        "operationId": "getPriceHistory",
+        "summary": "Stored price history (read, admin)",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/From"
+          },
+          {
+            "$ref": "#/components/parameters/To"
+          },
+          {
+            "$ref": "#/components/parameters/HistoryLimit"
+          },
+          {
+            "$ref": "#/components/parameters/Offset"
+          },
+          {
+            "$ref": "#/components/parameters/Order"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Page of prices",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PriceHistory"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/jobs": {
+      "get": {
+        "tags": [
+          "jobs"
+        ],
+        "operationId": "listJobs",
+        "summary": "Background jobs and their last run (admin)",
+        "responses": {
+          "200": {
+            "description": "Job summary",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobSummaryList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/jobs/runs": {
+      "get": {
+        "tags": [
+          "jobs"
+        ],
+        "operationId": "listJobRuns",
+        "summary": "Job run history, newest first (admin)",
+        "parameters": [
+          {
+            "name": "job",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "sync-prices"
+              ]
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/JobRunStatus"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/Offset"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Page of runs",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobRunList"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "ApiKeyAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "ft_<key>",
+        "description": "Service API key, for example `ft_...`. Not the CoinMarketCap key."
+      }
+    },
+    "headers": {
+      "XRequestId": {
+        "description": "Request id, echoed from the request or generated",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "RetryAfter": {
+        "description": "Seconds to wait before retrying",
+        "schema": {
+          "type": "integer"
+        }
+      }
+    },
+    "parameters": {
+      "Symbol": {
+        "name": "symbol",
+        "in": "path",
+        "required": true,
+        "description": "Coin symbol, case-insensitive",
+        "schema": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9]{1,15}$"
+        },
+        "example": "BTC"
+      },
+      "Limit": {
+        "name": "limit",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 20
+        }
+      },
+      "HistoryLimit": {
+        "name": "limit",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "default": 100
+        }
+      },
+      "Offset": {
+        "name": "offset",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        }
+      },
+      "From": {
+        "name": "from",
+        "in": "query",
+        "description": "Inclusive lower bound, UTC: `YYYY-MM-DD` or `YYYY-MM-DDTHH:mm:ss[.sss]Z`",
+        "schema": {
+          "type": "string"
+        },
+        "example": "2026-10-01"
+      },
+      "To": {
+        "name": "to",
+        "in": "query",
+        "description": "Upper bound, UTC. A date without time means the end of that day; a timestamp is inclusive.",
+        "schema": {
+          "type": "string"
+        },
+        "example": "2026-10-08"
+      },
+      "Order": {
+        "name": "order",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "enum": [
+            "asc",
+            "desc"
+          ],
+          "default": "desc"
+        }
+      }
+    },
+    "schemas": {
+      "Status": {
+        "type": "object",
+        "required": [
+          "status",
+          "checks",
+          "uptimeSec",
+          "timestamp",
+          "version"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "degraded"
+            ]
+          },
+          "checks": {
+            "type": "object",
+            "properties": {
+              "db": {
+                "type": "string",
+                "enum": [
+                  "ok",
+                  "error"
+                ]
+              }
+            }
+          },
+          "uptimeSec": {
+            "type": "integer"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "Coin": {
+        "type": "object",
+        "required": [
+          "cmcId",
+          "symbol",
+          "name",
+          "slug",
+          "isActive",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "cmcId": {
+            "type": "integer",
+            "example": 1
+          },
+          "symbol": {
+            "type": "string",
+            "example": "BTC"
+          },
+          "name": {
+            "type": "string",
+            "example": "Bitcoin"
+          },
+          "slug": {
+            "type": "string",
+            "example": "bitcoin"
+          },
+          "isActive": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "CoinList": {
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Coin"
+            }
+          },
+          "total": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          }
+        }
+      },
+      "CreateCoinRequest": {
+        "type": "object",
+        "required": [
+          "symbol"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9]{1,15}$",
+            "example": "btc"
+          }
+        }
+      },
+      "UpdateCoinRequest": {
+        "type": "object",
+        "required": [
+          "isActive"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "isActive": {
+            "type": "boolean"
+          }
+        }
+      },
+      "PricePoint": {
+        "type": "object",
+        "required": [
+          "quoteCurrency",
+          "price",
+          "sourceUpdatedAt",
+          "fetchedAt"
+        ],
+        "properties": {
+          "quoteCurrency": {
+            "type": "string",
+            "example": "USD"
+          },
+          "price": {
+            "type": "number"
+          },
+          "marketCap": {
+            "type": "number",
+            "nullable": true
+          },
+          "volume24h": {
+            "type": "number",
+            "nullable": true
+          },
+          "percentChange1h": {
+            "type": "number",
+            "nullable": true
+          },
+          "percentChange24h": {
+            "type": "number",
+            "nullable": true
+          },
+          "percentChange7d": {
+            "type": "number",
+            "nullable": true
+          },
+          "sourceUpdatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Time of the quote on CoinMarketCap"
+          },
+          "fetchedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Last time the service saw this quote"
+          }
+        }
+      },
+      "CurrentPrice": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/PricePoint"
+          },
+          {
+            "type": "object",
+            "required": [
+              "symbol",
+              "cmcId",
+              "source",
+              "stale",
+              "ageSec"
+            ],
+            "properties": {
+              "symbol": {
+                "type": "string"
+              },
+              "cmcId": {
+                "type": "integer"
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "cache",
+                  "live"
+                ]
+              },
+              "stale": {
+                "type": "boolean",
+                "description": "true when CoinMarketCap failed and the last stored price is returned"
+              },
+              "ageSec": {
+                "type": "integer",
+                "description": "Seconds since fetchedAt"
+              }
+            }
+          }
+        ],
+        "example": {
+          "symbol": "BTC",
+          "cmcId": 1,
+          "quoteCurrency": "USD",
+          "price": 64250.12,
+          "marketCap": 1260000000000.0,
+          "volume24h": 31000000000.0,
+          "percentChange1h": 0.1,
+          "percentChange24h": -1.2,
+          "percentChange7d": 3.4,
+          "sourceUpdatedAt": "2026-10-08T10:00:00.000Z",
+          "fetchedAt": "2026-10-08T10:00:05.000Z",
+          "source": "cache",
+          "stale": false,
+          "ageSec": 42
+        }
+      },
+      "PriceHistory": {
+        "type": "object",
+        "required": [
+          "symbol",
+          "quoteCurrency",
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "properties": {
+          "symbol": {
+            "type": "string"
+          },
+          "quoteCurrency": {
+            "type": "string"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PricePoint"
+            }
+          },
+          "total": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          }
+        }
+      },
+      "JobRunStatus": {
+        "type": "string",
+        "enum": [
+          "running",
+          "success",
+          "partial",
+          "failed",
+          "skipped",
+          "aborted"
+        ]
+      },
+      "JobRun": {
+        "type": "object",
+        "required": [
+          "id",
+          "jobName",
+          "status",
+          "startedAt",
+          "finishedAt",
+          "durationMs",
+          "itemsTotal",
+          "itemsOk",
+          "itemsFailed",
+          "errorCode",
+          "errorMessage"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "jobName": {
+            "type": "string",
+            "example": "sync-prices"
+          },
+          "status": {
+            "$ref": "#/components/schemas/JobRunStatus"
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "finishedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "durationMs": {
+            "type": "integer",
+            "nullable": true
+          },
+          "itemsTotal": {
+            "type": "integer"
+          },
+          "itemsOk": {
+            "type": "integer"
+          },
+          "itemsFailed": {
+            "type": "integer"
+          },
+          "errorCode": {
+            "type": "string",
+            "nullable": true,
+            "example": "CMC_RATE_LIMITED"
+          },
+          "errorMessage": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "JobRunList": {
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JobRun"
+            }
+          },
+          "total": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          }
+        }
+      },
+      "JobSummary": {
+        "type": "object",
+        "required": [
+          "name",
+          "enabled",
+          "running",
+          "nextRunAt",
+          "consecutiveFailures",
+          "intervalMs",
+          "lastRun"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "running": {
+            "type": "boolean"
+          },
+          "nextRunAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "consecutiveFailures": {
+            "type": "integer"
+          },
+          "intervalMs": {
+            "type": "integer"
+          },
+          "lastRun": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/JobRun"
+              }
+            ],
+            "nullable": true
+          }
+        }
+      },
+      "JobSummaryList": {
+        "type": "object",
+        "required": [
+          "jobs"
+        ],
+        "properties": {
+          "jobs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JobSummary"
+            }
+          }
+        }
+      },
+      "ValidationDetail": {
+        "type": "object",
+        "required": [
+          "field",
+          "message"
+        ],
+        "properties": {
+          "field": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "type": "string",
+                "example": "VALIDATION_ERROR"
+              },
+              "message": {
+                "type": "string"
+              },
+              "requestId": {
+                "type": "string"
+              },
+              "details": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ValidationDetail"
+                }
+              }
+            }
+          }
+        },
+        "example": {
+          "error": {
+            "code": "VALIDATION_ERROR",
+            "message": "Invalid request",
+            "requestId": "3f1c...",
+            "details": [
+              {
+                "field": "limit",
+                "message": "must be an integer 1..100"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "Invalid input (VALIDATION_ERROR)",
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "Missing, unknown or revoked API key",
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestId"
+          },
+          "WWW-Authenticate": {
+            "schema": {
+              "type": "string"
+            },
+            "example": "Bearer"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "The key role does not allow this operation",
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "Coin not found",
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Conflict": {
+        "description": "Coin already tracked or the tracked coin limit is reached",
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "PayloadTooLarge": {
+        "description": "Body is larger than 100 KB",
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "UnsupportedMediaType": {
+        "description": "Body is not JSON",
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "UpstreamError": {
+        "description": "CoinMarketCap returned an error or an invalid response (EXTERNAL_API_ERROR)",
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "UpstreamUnavailable": {
+        "description": "CoinMarketCap is unavailable or rate-limited (EXTERNAL_API_UNAVAILABLE, EXTERNAL_API_RATE_LIMITED)",
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestId"
+          },
+          "Retry-After": {
+            "$ref": "#/components/headers/RetryAfter"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "UpstreamTimeout": {
+        "description": "CoinMarketCap did not answer in time (EXTERNAL_API_TIMEOUT)",
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      }
+    }
+  }
+}

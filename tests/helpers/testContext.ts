@@ -9,6 +9,7 @@ import { migrate } from '../../src/db/migrate.js';
 import { migrations } from '../../src/db/migrations/index.js';
 import { generateApiKey, hashApiKey } from '../../src/modules/auth/apiKey.js';
 import { ApiKeysRepository } from '../../src/modules/auth/apiKeys.repository.js';
+import type { JobsService } from '../../src/modules/jobs/jobs.service.js';
 import type { CoinCatalog } from '../../src/modules/coins/coinCatalog.js';
 import { CoinsRepository } from '../../src/modules/coins/coins.repository.js';
 import { CoinsService } from '../../src/modules/coins/coins.service.js';
@@ -27,6 +28,7 @@ export interface TestContextOptions {
   provider?: PriceProvider;
   config?: Partial<AppConfig>;
   logger?: Logger;
+  jobs?: (db: Db) => JobsService;
 }
 
 export interface TestContext {
@@ -84,6 +86,7 @@ export async function createTestContext(opts: TestContextOptions = {}): Promise<
       coins,
       prices,
       apiKeys,
+      ...(opts.jobs !== undefined ? { jobs: opts.jobs(db) } : {}),
       clock: () => now,
     });
 
@@ -99,7 +102,7 @@ export async function createTestContext(opts: TestContextOptions = {}): Promise<
         now = new Date(iso);
       },
       reset() {
-        db.exec('DELETE FROM prices; DELETE FROM coins;');
+        db.exec('DELETE FROM prices; DELETE FROM coins; DELETE FROM job_runs;');
         now = new Date(testNow);
         const mocked = catalog.findBySymbol as { mockClear?: () => void };
         if (typeof mocked.mockClear === 'function') {
