@@ -104,7 +104,7 @@ async function trackBtc(ctx: TestContext): Promise<number> {
 
 function seed(db: Db, coinId: number, fetchedAt: string, patch: Partial<Quote> = {}): void {
   const written = new PricesRepository(db).insertMany([{ coinId, quote: quoteFor(1, patch), fetchedAt }]);
-  expect(written).toEqual({ inserted: 1, updated: 0 });
+  expect(written).toEqual({ inserted: 1, updated: 0, skipped: 0 });
 }
 
 function countPrices(db: Db): number {

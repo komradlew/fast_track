@@ -73,6 +73,8 @@ const SELECT_PAGE =
 const COUNT_FILTERED =
   'SELECT COUNT(*) AS total FROM coins WHERE (@isActive IS NULL OR is_active = @isActive)';
 
+const SELECT_ACTIVE = 'SELECT ' + COIN_COLUMNS + ' FROM coins WHERE is_active = 1 ORDER BY id';
+
 const COUNT_ALL = 'SELECT COUNT(*) AS total FROM coins';
 
 const UPDATE_ACTIVE =
@@ -86,6 +88,7 @@ export class CoinsRepository {
   private readonly selectPage: Database.Statement<[ListParams], CoinRow>;
   private readonly countFiltered: Database.Statement<[ActiveFilterParams], CountRow>;
   private readonly countAll: Database.Statement<[], CountRow>;
+  private readonly selectActive: Database.Statement<[], CoinRow>;
   private readonly updateActive: Database.Statement<[SetActiveParams], CoinRow>;
   private readonly deleteCoin: Database.Statement<[SymbolParams]>;
 
@@ -95,6 +98,7 @@ export class CoinsRepository {
     this.selectPage = db.prepare(SELECT_PAGE);
     this.countFiltered = db.prepare(COUNT_FILTERED);
     this.countAll = db.prepare(COUNT_ALL);
+    this.selectActive = db.prepare(SELECT_ACTIVE);
     this.updateActive = db.prepare(UPDATE_ACTIVE);
     this.deleteCoin = db.prepare(DELETE_BY_SYMBOL);
   }
@@ -139,6 +143,10 @@ export class CoinsRepository {
       items: this.selectPage.all(params).map(toCoin),
       total: requiredCount(this.countFiltered.get({ isActive: params.isActive })),
     };
+  }
+
+  listActive(): Coin[] {
+    return this.selectActive.all().map(toCoin);
   }
 
   setActive(symbol: string, isActive: boolean, now: string): Coin | undefined {

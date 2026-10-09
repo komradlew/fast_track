@@ -2,15 +2,19 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { createApp } from './app.js';
-import { loadConfig } from './config/index.js';
+import { configWarnings, loadConfig } from './config/index.js';
 import { openDb, type Db } from './db/connection.js';
 import { migrate } from './db/migrate.js';
 import { migrations } from './db/migrations/index.js';
 import { CmcClient } from './integrations/coinmarketcap/cmc.client.js';
 import { closeCmcHttp, createCmcHttp } from './integrations/coinmarketcap/cmc.http.js';
+import { createSyncPricesJob } from './jobs/syncPrices.job.js';
+import { TaskScheduler } from './jobs/taskScheduler.js';
 import { ApiKeysRepository } from './modules/auth/apiKeys.repository.js';
 import { CoinsRepository } from './modules/coins/coins.repository.js';
 import { CoinsService } from './modules/coins/coins.service.js';
+import { JobRunsRepository } from './modules/jobs/jobRuns.repository.js';
+import { JobsService } from './modules/jobs/jobs.service.js';
 import { PricesRepository } from './modules/prices/prices.repository.js';
 import { PricesService } from './modules/prices/prices.service.js';
 import { createLogger, type Logger } from './utils/logger.js';
@@ -67,8 +71,17 @@ try {
   process.exit(1);
 }
 
+for (const warning of configWarnings(config)) {
+  logger.warn(warning);
+}
+
 const db = openDatabaseOrExit(config.dbPath, logger);
 const clock = (): Date => new Date();
+const jobRuns = new JobRunsRepository(db);
+const interrupted = jobRuns.markInterrupted(clock().toISOString());
+if (interrupted > 0) {
+  logger.info('Marked interrupted job runs as aborted', { count: interrupted });
+}
 const apiKeys = new ApiKeysRepository(db);
 const coinsRepository = new CoinsRepository(db);
 const cmcHttp = createCmcHttp(config);
@@ -84,18 +97,38 @@ const coins = new CoinsService({
   config,
   clock,
 });
+const pricesRepository = new PricesRepository(db);
 const prices = new PricesService({
   coins: coinsRepository,
-  prices: new PricesRepository(db),
+  prices: pricesRepository,
   provider: cmcClient,
   config,
   clock,
   logger,
 });
-const app = createApp({ config, logger, version, db, coins, prices, apiKeys, clock });
+const scheduler = new TaskScheduler({ jobRuns, logger, clock });
+scheduler.register(
+  createSyncPricesJob({
+    coins: coinsRepository,
+    prices: pricesRepository,
+    provider: cmcClient,
+    config,
+    clock,
+  }),
+);
+const jobs = new JobsService({ scheduler, jobRuns, enabled: config.syncEnabled });
+const app = createApp({ config, logger, version, db, coins, prices, apiKeys, jobs, clock });
 
-// Later steps, such as the Day 4 scheduler, are inserted before the database.
+// Half of the shutdown budget: the database must still close before the forced exit.
+const schedulerStopTimeoutMs = Math.floor(config.shutdownTimeoutMs / 2);
+
+function stopScheduler(): Promise<void> {
+  return scheduler.stopAll(schedulerStopTimeoutMs);
+}
+
+// The scheduler stops before the database, so an aborted run can still be recorded.
 const closers: Array<() => Promise<void> | void> = [
+  stopScheduler,
   () => {
     closeCmcHttp(cmcHttp);
   },
@@ -122,6 +155,8 @@ async function runClosers(): Promise<void> {
   }
 }
 
+let shuttingDown = false;
+
 const server = app.listen(config.port, (error?: Error) => {
   if (error) {
     logger.error('Server failed to start', { err: error, port: config.port });
@@ -131,9 +166,13 @@ const server = app.listen(config.port, (error?: Error) => {
     return;
   }
   logger.info('Server started', { port: config.port });
+  if (config.syncEnabled && !shuttingDown) {
+    scheduler.start();
+  } else if (!config.syncEnabled) {
+    logger.info('Background sync is disabled (SYNC_ENABLED=false)');
+  }
 });
 
-let shuttingDown = false;
 
 async function shutdown(
   reason: NodeJS.Signals | 'uncaughtException' | 'unhandledRejection',
@@ -145,6 +184,7 @@ async function shutdown(
   shuttingDown = true;
 
   logger.info('Server shutting down', { signal: reason });
+  void stopScheduler();
 
   const timer = setTimeout(() => {
     logger.error('Forced shutdown');

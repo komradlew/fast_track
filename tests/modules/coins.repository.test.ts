@@ -209,3 +209,20 @@ test('delete removes the coin and its prices', () => {
   expect(repo.deleteBySymbol('BTC')).toBe(false);
   expect(repo.count()).toBe(0);
 });
+
+describe('listActive', () => {
+  test('returns only active coins without pagination', () => {
+    const { repo: coins } = openRepo();
+    coins.create({ cmcId: 1, symbol: 'BTC', name: 'Bitcoin', slug: 'bitcoin' }, now, { maxCoins: 200 });
+    coins.create({ cmcId: 1027, symbol: 'ETH', name: 'Ethereum', slug: 'ethereum' }, now, { maxCoins: 200 });
+    coins.create({ cmcId: 5426, symbol: 'SOL', name: 'Solana', slug: 'solana' }, now, { maxCoins: 200 });
+    coins.setActive('ETH', false, now);
+
+    expect(coins.listActive().map((coin) => coin.symbol)).toEqual(['BTC', 'SOL']);
+  });
+
+  test('returns an empty list when nothing is active', () => {
+    const { repo: coins } = openRepo();
+    expect(coins.listActive()).toEqual([]);
+  });
+});

@@ -24,6 +24,8 @@ export interface AppConfig {
   readonly maxTrackedCoins: number;
   readonly syncIntervalMs: number;
   readonly syncEnabled: boolean;
+  readonly syncInitialDelayMs: number;
+  readonly syncMaxBackoffMs: number;
   readonly shutdownTimeoutMs: number;
 }
 
@@ -153,6 +155,11 @@ export function loadDbConfig(env: NodeJS.ProcessEnv = process.env): DbConfig {
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const nodeEnv = readEnum(env, 'NODE_ENV', NODE_ENVS, 'development');
+  const syncIntervalMs = readInt(env, 'SYNC_INTERVAL_MS', 300_000, 60_000);
+  const syncMaxBackoffMs = readInt(env, 'SYNC_MAX_BACKOFF_MS', Math.max(3_600_000, syncIntervalMs), 60_000);
+  if (syncMaxBackoffMs < syncIntervalMs) {
+    invalidEnv('SYNC_MAX_BACKOFF_MS', `integer >= SYNC_INTERVAL_MS (${String(syncIntervalMs)})`, String(syncMaxBackoffMs));
+  }
 
   return Object.freeze({
     nodeEnv,
@@ -164,10 +171,22 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     cmcTimeoutMs: readInt(env, 'CMC_TIMEOUT_MS', 5000, 100, 60_000),
     cmcDeadlineMs: readInt(env, 'CMC_DEADLINE_MS', 8000, 100, 120_000),
     quoteCurrency: readPattern(env, 'QUOTE_CURRENCY', QUOTE_CURRENCY_PATTERN, 'USD', '3-5 uppercase letters'),
-    priceMaxAgeMs: readInt(env, 'PRICE_MAX_AGE_MS', 60_000, 0),
+    priceMaxAgeMs: readInt(env, 'PRICE_MAX_AGE_MS', 360_000, 0),
     maxTrackedCoins: readInt(env, 'MAX_TRACKED_COINS', 200, 1, 200),
-    syncIntervalMs: readInt(env, 'SYNC_INTERVAL_MS', 300_000, 60_000),
+    syncIntervalMs,
     syncEnabled: readBool(env, 'SYNC_ENABLED', true),
+    syncInitialDelayMs: readInt(env, 'SYNC_INITIAL_DELAY_MS', 5000, 0, 600_000),
+    syncMaxBackoffMs,
     shutdownTimeoutMs: readInt(env, 'SHUTDOWN_TIMEOUT_MS', 10_000, 1000, 60_000),
   });
+}
+
+export function configWarnings(config: Pick<AppConfig, 'syncEnabled' | 'priceMaxAgeMs' | 'syncIntervalMs'>): string[] {
+  const warnings: string[] = [];
+  if (config.syncEnabled && config.priceMaxAgeMs < config.syncIntervalMs) {
+    warnings.push(
+      'PRICE_MAX_AGE_MS is lower than SYNC_INTERVAL_MS: /price will call CoinMarketCap between sync runs',
+    );
+  }
+  return warnings;
 }
