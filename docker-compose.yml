@@ -1,0 +1,17 @@
+services:
+  api:
+    build: .
+    ports:
+      - "3000:3000"
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DB_PATH: /data/app.db
+    volumes:
+      - app-data:/data
+    stop_grace_period: 15s
+    restart: unless-stopped
+
+volumes:
+  app-data:
